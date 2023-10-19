@@ -10,6 +10,9 @@ lldb_tablegen(TargetPropertiesEnum.inc -gen-lldb-property-enum-defs
 add_lldb_library(lldbTarget
   ABI.cpp
   AssertFrameRecognizer.cpp
+  DILAst.cpp
+  DILEval.cpp
+  DILParser.cpp
   DynamicRegisterInfo.cpp
   ExecutionContext.cpp
   InstrumentationRuntime.cpp

@@ -1,0 +1,664 @@
+//===-- DILAst.h ------------------------------------------------*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef LLDB_DIL_AST_H_
+#define LLDB_DIL_AST_H_
+
+#include <memory>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/TokenKinds.h"
+#include "lldb/Core/ValueObject.h"
+#include "lldb/Symbol/Type.h"
+#include "lldb/Symbol/TypeList.h"
+#include "lldb/Target/LanguageRuntime.h"
+#include "lldb/Utility/ConstString.h"
+#include "llvm/ADT/APFloat.h"
+#include "llvm/ADT/APInt.h"
+
+namespace lldb_private {
+
+struct DILMemberInfo {
+  std::optional<ConstString> name;
+  CompilerType type;
+  bool is_bitfield;
+  uint32_t bitfield_size_in_bits;
+
+  explicit operator bool() const { return type.IsValid(); }
+};
+
+lldb::ValueObjectSP DILGetSPWithLock(
+    lldb::ValueObjectSP valobj_sp,
+    lldb::DynamicValueType use_dynamic = lldb::eNoDynamicValues,
+    bool use_synthetic = false);
+
+class DILVisitor;
+
+enum class NodeKind{
+  kDILErrorNode,
+  kLiteralNode,
+  kIdentifierNode,
+  kSizeOfNode,
+  kBuiltinFunctionCallNode,
+  kCStyleCastNode,
+  kCxxStaticCastNode,
+  kCxxReinterpretCastNode,
+  kMemberOfNode,
+  kArraySubscriptNode,
+  kBinaryOpNode,
+  kUnaryOpNode,
+  kTernaryOpNode,
+  kSmartPtrToPtrDecay
+};
+
+// TODO: Save original token and the source position, so we can give
+// better diagnostic messages during the evaluation.
+class DILAstNode {
+ public:
+  DILAstNode(clang::SourceLocation location) : location_(location) {}
+  virtual ~DILAstNode() {}
+
+  virtual void Accept(DILVisitor* v) const = 0;
+
+  virtual bool is_error() const { return false; };
+  virtual bool is_rvalue() const = 0;
+  virtual bool is_bitfield() const { return false; };
+  virtual bool is_context_var() const { return false; };
+  virtual bool is_literal_zero() const { return false; }
+  virtual uint32_t bitfield_size() const { return 0; }
+  virtual CompilerType result_type() const = 0;
+
+  virtual NodeKind what_am_i() const = 0;
+
+  clang::SourceLocation location() const { return location_; }
+
+  // The expression result type, but dereferenced in case it's a reference. This
+  // is for convenience, since for the purposes of the semantic analysis only
+  // the dereferenced type matters.
+  CompilerType result_type_deref() const;
+
+ private:
+  clang::SourceLocation location_;
+};
+
+using ExprResult = std::unique_ptr<DILAstNode>;
+
+class DILErrorNode : public DILAstNode {
+ public:
+  DILErrorNode(CompilerType empty_type)
+      : DILAstNode(clang::SourceLocation()), m_empty_type(empty_type) {}
+  void Accept(DILVisitor* v) const override;
+  bool is_error() const override { return true; }
+  bool is_rvalue() const override { return false; }
+  CompilerType result_type() const override { return m_empty_type; }
+  CompilerType result_type_real() const { return m_empty_type; }
+  NodeKind what_am_i() const override { return NodeKind::kDILErrorNode; }
+
+ private:
+  CompilerType m_empty_type;
+};
+
+class LiteralNode : public DILAstNode {
+ public:
+  template <typename ValueT>
+  LiteralNode(clang::SourceLocation location, CompilerType type, ValueT&& value,
+              bool is_literal_zero)
+      : DILAstNode(location),
+        m_type(type),
+        m_value(std::forward<ValueT>(value)),
+        m_is_literal_zero(is_literal_zero) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return true; }
+  bool is_literal_zero() const override { return m_is_literal_zero; }
+  CompilerType result_type() const override { return m_type; }
+  NodeKind what_am_i() const override { return NodeKind::kLiteralNode; }
+
+  template <typename ValueT>
+  ValueT value() const {
+    return std::get<ValueT>(m_value);
+  }
+
+  auto value() const { return m_value; }
+
+ private:
+  CompilerType m_type;
+  std::variant<llvm::APInt, llvm::APFloat, bool, std::vector<char>> m_value;
+  bool m_is_literal_zero;
+};
+
+class IdentifierInfo {
+ private:
+  using MemberPath = std::vector<uint32_t>;
+  using IdentifierInfoPtr = std::unique_ptr<IdentifierInfo>;
+
+ public:
+  enum class Kind {
+    kValue,
+    kContextArg,
+    kMemberPath,
+    kThisKeyword,
+  };
+
+  static IdentifierInfoPtr FromValue(lldb::ValueObjectSP value_sp) {
+    CompilerType type;
+    lldb::ValueObjectSP value = DILGetSPWithLock(value_sp);
+    if (value)
+      type = value->GetCompilerType();
+    return IdentifierInfoPtr(new IdentifierInfo(Kind::kValue, type,
+                                                value, {}));
+    }
+
+  static IdentifierInfoPtr FromContextArg(CompilerType type) {
+    lldb::ValueObjectSP empty_value;
+    return IdentifierInfoPtr(
+        new IdentifierInfo(Kind::kContextArg, type, empty_value, {}));
+  }
+
+  static IdentifierInfoPtr FromMemberPath(CompilerType type, MemberPath path) {
+    lldb::ValueObjectSP empty_value;
+    return IdentifierInfoPtr(new IdentifierInfo(
+        Kind::kMemberPath, type, empty_value, std::move(path)));
+  }
+
+  static IdentifierInfoPtr FromThisKeyword(CompilerType type) {
+    lldb::ValueObjectSP empty_value;
+    return IdentifierInfoPtr(
+        new IdentifierInfo(Kind::kThisKeyword, type, empty_value, {}));
+  }
+
+  Kind kind() const { return m_kind; }
+  lldb::ValueObjectSP value() const { return m_value; }
+  const MemberPath& path() const { return m_path; }
+
+  CompilerType GetType() { return m_type; }
+  bool IsValid() const { return m_type.IsValid(); }
+
+  IdentifierInfo(Kind kind, CompilerType type, lldb::ValueObjectSP value,
+                 MemberPath path)
+      : m_kind(kind),
+        m_type(type),
+        m_value(std::move(value)),
+        m_path(std::move(path)) {}
+
+ private:
+  Kind m_kind;
+  CompilerType m_type;
+  lldb::ValueObjectSP m_value;
+  MemberPath m_path;
+};
+
+bool IsContextVar(const std::string& name);
+
+std::unique_ptr<IdentifierInfo> LookupIdentifier(
+    const std::string& name,
+    std::shared_ptr<ExecutionContextScope> ctx_scope,
+    CompilerType *scope_ptr = nullptr);
+
+CompilerType ResolveTypeByName(
+    const std::string& name,
+    std::shared_ptr<ExecutionContextScope> ctx_scope);
+
+bool CompareTypes(CompilerType lhs, CompilerType rhs);
+
+bool IsInteger(CompilerType type);
+bool IsFloat(CompilerType type);
+bool IsEnum(CompilerType type);
+bool IsIntegerOrUnscopedEnum(CompilerType type);
+bool IsPointerType(CompilerType type);
+bool IsNullPtrType(CompilerType type);
+bool IsScalar(CompilerType type);
+bool IsBool(CompilerType type);
+bool IsSigned(CompilerType type);
+bool IsArrayType(CompilerType type);
+bool IsReferenceType(CompilerType type);
+bool IsSmartPtrType(CompilerType type);
+bool IsScopedEnum(CompilerType type);
+bool IsUnscopedEnum(CompilerType type);
+
+
+
+
+
+
+
+class IdentifierNode : public DILAstNode {
+ public:
+  IdentifierNode(clang::SourceLocation location, std::string name,
+                 std::unique_ptr<IdentifierInfo> identifier,
+                 bool is_rvalue, bool is_context_var)
+      : DILAstNode(location),
+        m_is_rvalue(is_rvalue),
+        m_is_context_var(is_context_var),
+        m_name(std::move(name)),
+        m_identifier(std::move(identifier)) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return m_is_rvalue; }
+  bool is_context_var() const override { return m_is_context_var; };
+  CompilerType result_type() const override { return m_identifier->GetType(); }
+  NodeKind what_am_i() const override { return NodeKind::kIdentifierNode; }
+
+  std::string name() const { return m_name; }
+  const IdentifierInfo& info() const { return *m_identifier; }
+
+ private:
+  bool m_is_rvalue;
+  bool m_is_context_var;
+  std::string m_name;
+  std::unique_ptr<IdentifierInfo> m_identifier;
+};
+
+class SizeOfNode : public DILAstNode {
+ public:
+  SizeOfNode(clang::SourceLocation location, CompilerType type,
+             CompilerType operand)
+      : DILAstNode(location),
+        m_type(type),
+        m_operand(operand) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return true; }
+  CompilerType result_type() const override { return m_type; }
+  NodeKind what_am_i() const override { return NodeKind::kSizeOfNode; }
+
+  CompilerType operand() const { return m_operand; }
+
+ private:
+  CompilerType m_type;
+  CompilerType m_operand;
+};
+
+class BuiltinFunctionCallNode : public DILAstNode {
+ public:
+  BuiltinFunctionCallNode(clang::SourceLocation location,
+                          CompilerType result_type, std::string name,
+                          std::vector<ExprResult> arguments)
+      : DILAstNode(location),
+        m_result_type(result_type),
+        m_name(std::move(name)),
+        m_arguments(std::move(arguments)) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return true; }
+  CompilerType result_type() const override { return m_result_type; }
+  NodeKind what_am_i() const override { return NodeKind::kBuiltinFunctionCallNode; }
+
+  std::string name() const { return m_name; }
+  const std::vector<ExprResult>& arguments() const { return m_arguments; };
+
+ private:
+  CompilerType m_result_type;
+  std::string m_name;
+  std::vector<ExprResult> m_arguments;
+};
+
+enum class CStyleCastKind {
+  kArithmetic,
+  kEnumeration,
+  kPointer,
+  kNullptr,
+  kReference,
+};
+
+class CStyleCastNode : public DILAstNode {
+ public:
+  CStyleCastNode(clang::SourceLocation location, CompilerType type,
+                 ExprResult rhs, CStyleCastKind kind)
+      : DILAstNode(location),
+        m_type(type),
+        m_rhs(std::move(rhs)),
+        m_kind(kind) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override {
+    return m_kind != CStyleCastKind::kReference;
+  }
+  CompilerType result_type() const override { return m_type; }
+  NodeKind what_am_i() const override { return NodeKind::kCStyleCastNode; }
+
+  CompilerType type() const { return m_type; }
+  DILAstNode* rhs() const { return m_rhs.get(); }
+  CStyleCastKind kind() const { return m_kind; }
+
+ private:
+  CompilerType m_type;
+  ExprResult m_rhs;
+  CStyleCastKind m_kind;
+};
+
+enum class CxxStaticCastKind {
+  kNoOp,
+  kArithmetic,
+  kEnumeration,
+  kPointer,
+  kNullptr,
+  kBaseToDerived,
+  kDerivedToBase,
+};
+
+class CxxStaticCastNode : public DILAstNode {
+ public:
+  CxxStaticCastNode(clang::SourceLocation location, CompilerType type,
+                    ExprResult rhs, CxxStaticCastKind kind, bool is_rvalue)
+      : DILAstNode(location),
+        m_type(type),
+        m_rhs(std::move(rhs)),
+        m_kind(kind),
+        m_is_rvalue(is_rvalue) {
+    assert(kind != CxxStaticCastKind::kBaseToDerived &&
+           kind != CxxStaticCastKind::kDerivedToBase &&
+           "invalid constructor for base-to-derived and derived-to-base casts");
+  }
+
+  CxxStaticCastNode(clang::SourceLocation location, CompilerType type,
+                    ExprResult rhs, std::vector<uint32_t> idx, bool is_rvalue)
+      : DILAstNode(location),
+        m_type(type),
+        m_rhs(std::move(rhs)),
+        m_idx(std::move(idx)),
+        m_kind(CxxStaticCastKind::kDerivedToBase),
+        m_is_rvalue(is_rvalue) {}
+
+  CxxStaticCastNode(clang::SourceLocation location, CompilerType type,
+                    ExprResult rhs, uint64_t offset, bool is_rvalue)
+      : DILAstNode(location),
+        m_type(type),
+        m_rhs(std::move(rhs)),
+        m_offset(offset),
+        m_kind(CxxStaticCastKind::kBaseToDerived),
+        m_is_rvalue(is_rvalue) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return m_is_rvalue; }
+  CompilerType result_type() const override { return m_type; }
+  NodeKind what_am_i() const override { return NodeKind::kCxxStaticCastNode; }
+
+  CompilerType type() const { return m_type; }
+  DILAstNode* rhs() const { return m_rhs.get(); }
+  const std::vector<uint32_t>& idx() const { return m_idx; }
+  uint64_t offset() const { return m_offset; }
+  CxxStaticCastKind kind() const { return m_kind; }
+
+ private:
+  CompilerType m_type;
+  ExprResult m_rhs;
+  std::vector<uint32_t> m_idx;
+  uint64_t m_offset = 0;
+  CxxStaticCastKind m_kind;
+  bool m_is_rvalue;
+};
+
+class CxxReinterpretCastNode : public DILAstNode {
+ public:
+  CxxReinterpretCastNode(clang::SourceLocation location, CompilerType type,
+                         ExprResult rhs, bool is_rvalue)
+      : DILAstNode(location),
+        m_type(type),
+        m_rhs(std::move(rhs)),
+        m_is_rvalue(is_rvalue) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return m_is_rvalue; }
+  CompilerType result_type() const override { return m_type; }
+  NodeKind what_am_i() const override { return NodeKind::kCxxReinterpretCastNode; }
+
+  CompilerType type() const { return m_type; }
+  DILAstNode* rhs() const { return m_rhs.get(); }
+
+ private:
+  CompilerType m_type;
+  ExprResult m_rhs;
+  bool m_is_rvalue;
+};
+
+class MemberOfNode : public DILAstNode {
+ public:
+  MemberOfNode(clang::SourceLocation location, CompilerType result_type,
+               ExprResult lhs, bool is_bitfield, uint32_t bitfield_size,
+               std::vector<uint32_t> member_index, bool is_arrow,
+               bool is_synthetic, ConstString name)
+      : DILAstNode(location),
+        m_result_type(result_type),
+        m_lhs(std::move(lhs)),
+        m_is_bitfield(is_bitfield),
+        m_bitfield_size(bitfield_size),
+        m_member_index(std::move(member_index)),
+        m_is_arrow(is_arrow),
+        m_is_synthetic(is_synthetic),
+        m_field_name(name) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return false; }
+  bool is_bitfield() const override { return m_is_bitfield; }
+  uint32_t bitfield_size() const override { return m_bitfield_size; }
+  CompilerType result_type() const override { return m_result_type; }
+  NodeKind what_am_i() const override { return NodeKind::kMemberOfNode; }
+
+  DILAstNode* lhs() const { return m_lhs.get(); }
+  const std::vector<uint32_t>& member_index() const { return m_member_index; }
+  bool is_arrow() const { return m_is_arrow; }
+  bool is_synthetic() const { return m_is_synthetic; }
+  ConstString field_name() const { return m_field_name; }
+
+ private:
+  CompilerType m_result_type;
+  ExprResult m_lhs;
+  bool m_is_bitfield;
+  uint32_t m_bitfield_size;
+  std::vector<uint32_t> m_member_index;
+  bool m_is_arrow;
+  bool m_is_synthetic;
+  ConstString m_field_name;
+};
+
+class ArraySubscriptNode : public DILAstNode {
+ public:
+  ArraySubscriptNode(clang::SourceLocation location, CompilerType result_type,
+                     ExprResult base, ExprResult index)
+      : DILAstNode(location),
+        m_result_type(result_type),
+        m_base(std::move(base)),
+        m_index(std::move(index)) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return false; }
+  CompilerType result_type() const override { return m_result_type; }
+  NodeKind what_am_i() const override { return NodeKind::kArraySubscriptNode; }
+
+  DILAstNode* base() const { return m_base.get(); }
+  DILAstNode* index() const { return m_index.get(); }
+
+ private:
+  CompilerType m_result_type;
+  ExprResult m_base;
+  ExprResult m_index;
+};
+
+enum class BinaryOpKind {
+  Mul,        // "*"
+  Div,        // "/"
+  Rem,        // "%"
+  Add,        // "+"
+  Sub,        // "-"
+  Shl,        // "<<"
+  Shr,        // ">>"
+  LT,         // "<"
+  GT,         // ">"
+  LE,         // "<="
+  GE,         // ">="
+  EQ,         // "=="
+  NE,         // "!="
+  And,        // "&"
+  Xor,        // "^"
+  Or,         // "|"
+  LAnd,       // "&&"
+  LOr,        // "||"
+  Assign,     // "="
+  MulAssign,  // "*="
+  DivAssign,  // "/="
+  RemAssign,  // "%="
+  AddAssign,  // "+="
+  SubAssign,  // "-="
+  ShlAssign,  // "<<="
+  ShrAssign,  // ">>="
+  AndAssign,  // "&="
+  XorAssign,  // "^="
+  OrAssign,   // "|="
+};
+
+std::string to_string(BinaryOpKind kind);
+BinaryOpKind clang_token_kind_to_binary_op_kind(
+    clang::tok::TokenKind token_kind);
+bool binary_op_kind_is_comp_assign(BinaryOpKind kind);
+
+class BinaryOpNode : public DILAstNode {
+ public:
+  BinaryOpNode(clang::SourceLocation location, CompilerType result_type,
+               BinaryOpKind kind, ExprResult lhs, ExprResult rhs,
+               CompilerType comp_assign_type)
+      : DILAstNode(location),
+        m_result_type(result_type),
+        m_kind(kind),
+        m_lhs(std::move(lhs)),
+        m_rhs(std::move(rhs)),
+        m_comp_assign_type(comp_assign_type) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override {
+    return !binary_op_kind_is_comp_assign(m_kind);
+  }
+  CompilerType result_type() const override { return m_result_type; }
+  NodeKind what_am_i() const override { return NodeKind::kBinaryOpNode; }
+
+  BinaryOpKind kind() const { return m_kind; }
+  DILAstNode* lhs() const { return m_lhs.get(); }
+  DILAstNode* rhs() const { return m_rhs.get(); }
+  CompilerType comp_assign_type() const { return m_comp_assign_type; }
+
+ private:
+  CompilerType m_result_type;
+  BinaryOpKind m_kind;
+  ExprResult m_lhs;
+  ExprResult m_rhs;
+  CompilerType m_comp_assign_type;
+};
+
+enum class UnaryOpKind {
+  PostInc,  // "++"
+  PostDec,  // "--"
+  PreInc,   // "++"
+  PreDec,   // "--"
+  AddrOf,   // "&"
+  Deref,    // "*"
+  Plus,     // "+"
+  Minus,    // "-"
+  Not,      // "~"
+  LNot,     // "!"
+};
+
+std::string to_string(UnaryOpKind kind);
+
+class UnaryOpNode : public DILAstNode {
+ public:
+  UnaryOpNode(clang::SourceLocation location, CompilerType result_type,
+              UnaryOpKind kind, ExprResult rhs)
+      : DILAstNode(location),
+        m_result_type(result_type),
+        m_kind(kind),
+        m_rhs(std::move(rhs)) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return m_kind != UnaryOpKind::Deref; }
+  CompilerType result_type() const override { return m_result_type; }
+  NodeKind what_am_i() const override { return NodeKind::kUnaryOpNode; }
+
+  UnaryOpKind kind() const { return m_kind; }
+  DILAstNode* rhs() const { return m_rhs.get(); }
+
+ private:
+  CompilerType m_result_type;
+  UnaryOpKind m_kind;
+  ExprResult m_rhs;
+};
+
+class TernaryOpNode : public DILAstNode {
+ public:
+  TernaryOpNode(clang::SourceLocation location, CompilerType result_type,
+                ExprResult cond, ExprResult lhs, ExprResult rhs)
+      : DILAstNode(location),
+        m_result_type(result_type),
+        m_cond(std::move(cond)),
+        m_lhs(std::move(lhs)),
+        m_rhs(std::move(rhs)) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override {
+    return m_lhs->is_rvalue() || m_rhs->is_rvalue();
+  }
+  bool is_bitfield() const override {
+    return m_lhs->is_bitfield() || m_rhs->is_bitfield();
+  }
+  CompilerType result_type() const override { return m_result_type; }
+  NodeKind what_am_i() const override { return NodeKind::kTernaryOpNode; }
+
+  DILAstNode* cond() const { return m_cond.get(); }
+  DILAstNode* lhs() const { return m_lhs.get(); }
+  DILAstNode* rhs() const { return m_rhs.get(); }
+
+ private:
+  CompilerType m_result_type;
+  ExprResult m_cond;
+  ExprResult m_lhs;
+  ExprResult m_rhs;
+};
+
+class SmartPtrToPtrDecay : public DILAstNode {
+ public:
+  SmartPtrToPtrDecay(clang::SourceLocation location, CompilerType result_type,
+                     ExprResult ptr)
+      : DILAstNode(location), m_result_type(result_type), m_ptr(std::move(ptr)) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return false; }
+  CompilerType result_type() const override { return m_result_type; }
+  NodeKind what_am_i() const override { return NodeKind::kSmartPtrToPtrDecay; }
+
+  DILAstNode* ptr() const { return m_ptr.get(); }
+
+ private:
+  CompilerType m_result_type;
+  ExprResult m_ptr;
+};
+
+class DILVisitor {
+ public:
+  virtual ~DILVisitor() {}
+  virtual void Visit(const DILErrorNode* node) = 0;
+  virtual void Visit(const LiteralNode* node) = 0;
+  virtual void Visit(const IdentifierNode* node) = 0;
+  virtual void Visit(const SizeOfNode* node) = 0;
+  virtual void Visit(const BuiltinFunctionCallNode* node) = 0;
+  virtual void Visit(const CStyleCastNode* node) = 0;
+  virtual void Visit(const CxxStaticCastNode* node) = 0;
+  virtual void Visit(const CxxReinterpretCastNode* node) = 0;
+  virtual void Visit(const MemberOfNode* node) = 0;
+  virtual void Visit(const ArraySubscriptNode* node) = 0;
+  virtual void Visit(const BinaryOpNode* node) = 0;
+  virtual void Visit(const UnaryOpNode* node) = 0;
+  virtual void Visit(const TernaryOpNode* node) = 0;
+  virtual void Visit(const SmartPtrToPtrDecay* node) = 0;
+};
+
+}  // namespace lldb_private
+
+#endif  // LLDB_DIL_AST_H_
