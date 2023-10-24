@@ -43,7 +43,7 @@ lldb::ValueObjectSP DILGetSPWithLock(
 
 class DILVisitor;
 
-enum class NodeKind{
+enum class DILNodeKind{
   kDILErrorNode,
   kLiteralNode,
   kIdentifierNode,
@@ -77,7 +77,7 @@ class DILAstNode {
   virtual uint32_t bitfield_size() const { return 0; }
   virtual CompilerType result_type() const = 0;
 
-  virtual NodeKind what_am_i() const = 0;
+  virtual DILNodeKind what_am_i() const = 0;
 
   clang::SourceLocation location() const { return location_; }
 
@@ -101,7 +101,7 @@ class DILErrorNode : public DILAstNode {
   bool is_rvalue() const override { return false; }
   CompilerType result_type() const override { return m_empty_type; }
   CompilerType result_type_real() const { return m_empty_type; }
-  NodeKind what_am_i() const override { return NodeKind::kDILErrorNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kDILErrorNode; }
 
  private:
   CompilerType m_empty_type;
@@ -121,7 +121,7 @@ class LiteralNode : public DILAstNode {
   bool is_rvalue() const override { return true; }
   bool is_literal_zero() const override { return m_is_literal_zero; }
   CompilerType result_type() const override { return m_type; }
-  NodeKind what_am_i() const override { return NodeKind::kLiteralNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kLiteralNode; }
 
   template <typename ValueT>
   ValueT value() const {
@@ -246,7 +246,7 @@ class IdentifierNode : public DILAstNode {
   bool is_rvalue() const override { return m_is_rvalue; }
   bool is_context_var() const override { return m_is_context_var; };
   CompilerType result_type() const override { return m_identifier->GetType(); }
-  NodeKind what_am_i() const override { return NodeKind::kIdentifierNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kIdentifierNode; }
 
   std::string name() const { return m_name; }
   const IdentifierInfo& info() const { return *m_identifier; }
@@ -269,7 +269,7 @@ class SizeOfNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return true; }
   CompilerType result_type() const override { return m_type; }
-  NodeKind what_am_i() const override { return NodeKind::kSizeOfNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kSizeOfNode; }
 
   CompilerType operand() const { return m_operand; }
 
@@ -291,7 +291,7 @@ class BuiltinFunctionCallNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return true; }
   CompilerType result_type() const override { return m_result_type; }
-  NodeKind what_am_i() const override { return NodeKind::kBuiltinFunctionCallNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kBuiltinFunctionCallNode; }
 
   std::string name() const { return m_name; }
   const std::vector<ExprResult>& arguments() const { return m_arguments; };
@@ -324,7 +324,7 @@ class CStyleCastNode : public DILAstNode {
     return m_kind != CStyleCastKind::kReference;
   }
   CompilerType result_type() const override { return m_type; }
-  NodeKind what_am_i() const override { return NodeKind::kCStyleCastNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kCStyleCastNode; }
 
   CompilerType type() const { return m_type; }
   DILAstNode* rhs() const { return m_rhs.get(); }
@@ -381,7 +381,7 @@ class CxxStaticCastNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return m_is_rvalue; }
   CompilerType result_type() const override { return m_type; }
-  NodeKind what_am_i() const override { return NodeKind::kCxxStaticCastNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kCxxStaticCastNode; }
 
   CompilerType type() const { return m_type; }
   DILAstNode* rhs() const { return m_rhs.get(); }
@@ -410,7 +410,7 @@ class CxxReinterpretCastNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return m_is_rvalue; }
   CompilerType result_type() const override { return m_type; }
-  NodeKind what_am_i() const override { return NodeKind::kCxxReinterpretCastNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kCxxReinterpretCastNode; }
 
   CompilerType type() const { return m_type; }
   DILAstNode* rhs() const { return m_rhs.get(); }
@@ -442,7 +442,7 @@ class MemberOfNode : public DILAstNode {
   bool is_bitfield() const override { return m_is_bitfield; }
   uint32_t bitfield_size() const override { return m_bitfield_size; }
   CompilerType result_type() const override { return m_result_type; }
-  NodeKind what_am_i() const override { return NodeKind::kMemberOfNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kMemberOfNode; }
 
   DILAstNode* lhs() const { return m_lhs.get(); }
   const std::vector<uint32_t>& member_index() const { return m_member_index; }
@@ -473,7 +473,7 @@ class ArraySubscriptNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return false; }
   CompilerType result_type() const override { return m_result_type; }
-  NodeKind what_am_i() const override { return NodeKind::kArraySubscriptNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kArraySubscriptNode; }
 
   DILAstNode* base() const { return m_base.get(); }
   DILAstNode* index() const { return m_index.get(); }
@@ -538,7 +538,7 @@ class BinaryOpNode : public DILAstNode {
     return !binary_op_kind_is_comp_assign(m_kind);
   }
   CompilerType result_type() const override { return m_result_type; }
-  NodeKind what_am_i() const override { return NodeKind::kBinaryOpNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kBinaryOpNode; }
 
   BinaryOpKind kind() const { return m_kind; }
   DILAstNode* lhs() const { return m_lhs.get(); }
@@ -580,7 +580,7 @@ class UnaryOpNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return m_kind != UnaryOpKind::Deref; }
   CompilerType result_type() const override { return m_result_type; }
-  NodeKind what_am_i() const override { return NodeKind::kUnaryOpNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kUnaryOpNode; }
 
   UnaryOpKind kind() const { return m_kind; }
   DILAstNode* rhs() const { return m_rhs.get(); }
@@ -609,7 +609,7 @@ class TernaryOpNode : public DILAstNode {
     return m_lhs->is_bitfield() || m_rhs->is_bitfield();
   }
   CompilerType result_type() const override { return m_result_type; }
-  NodeKind what_am_i() const override { return NodeKind::kTernaryOpNode; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kTernaryOpNode; }
 
   DILAstNode* cond() const { return m_cond.get(); }
   DILAstNode* lhs() const { return m_lhs.get(); }
@@ -631,7 +631,7 @@ class SmartPtrToPtrDecay : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return false; }
   CompilerType result_type() const override { return m_result_type; }
-  NodeKind what_am_i() const override { return NodeKind::kSmartPtrToPtrDecay; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kSmartPtrToPtrDecay; }
 
   DILAstNode* ptr() const { return m_ptr.get(); }
 

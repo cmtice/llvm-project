@@ -101,7 +101,10 @@ static CompilerType GetBasicType(std::shared_ptr<ExecutionContextScope> ctx,
   static std::unordered_map<lldb::BasicType, CompilerType> basic_types;
   auto type = basic_types.find(basic_type);
   if (type != basic_types.end()) {
-    return type->second;
+    std::string type_name((type->second).GetTypeName().AsCString());
+    // Only return the found type if it's valid.
+    if (type_name != "<invalid>")
+      return type->second;
   }
 
   lldb::TargetSP target_sp = ctx->CalculateTarget();
@@ -3907,7 +3910,7 @@ ExprResult DILParser::BuildBinarySubscript(ExprResult lhs, ExprResult rhs,
   } else {
     // Check to see if this might be a synthetic value.
     const DILAstNode* ast_node = lhs.get();
-    if (ast_node->what_am_i() == NodeKind::kIdentifierNode) {
+    if (ast_node->what_am_i() == DILNodeKind::kIdentifierNode) {
       const IdentifierNode* id_node =
           static_cast<const IdentifierNode*>(ast_node);
       auto identifier = static_cast<const IdentifierInfo&>(id_node->info());
@@ -4004,7 +4007,7 @@ ExprResult DILParser::BuildMemberOf(ExprResult lhs, std::string member_id,
 
   lldb::ValueObjectSP lhs_valobj_sp;
   const DILAstNode* ast_node = lhs.get();
-  if (ast_node->what_am_i() == NodeKind::kIdentifierNode) {
+  if (ast_node->what_am_i() == DILNodeKind::kIdentifierNode) {
     const IdentifierNode* id_node = static_cast<const IdentifierNode*>(ast_node);
     auto identifier = static_cast<const IdentifierInfo&>(id_node->info());
     lhs_valobj_sp = identifier.value();
