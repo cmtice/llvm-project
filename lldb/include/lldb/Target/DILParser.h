@@ -145,11 +145,9 @@ class BuiltinFunctionDef {
 }; // class BuiltinFunctionDef
 
 // Pure recursive descent parser for C++ like expressions.
-// EBNF grammar is described here:
-// docs/expr-ebnf.txt
+// EBNF grammar for the parser is described in lldb/docs/dil-expr-lang.ebnf
 class DILParser {
  public:
-  // explicit DILParser(std::shared_ptr<clang::SourceManagerForFile> sm);
   explicit DILParser(std::shared_ptr<DILSourceManager> dil_sm,
                      std::shared_ptr<ExecutionContextScope> exe_ctx_scope,
                      bool use_synthetic);

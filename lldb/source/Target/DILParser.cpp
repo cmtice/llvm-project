@@ -4,6 +4,11 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// This implements the recursive descent parser for the Data Inspection
+// Language (DIL), and its helper functions, which will eventually underlie the
+// 'frame variable' command. The language that this parser recognizes is
+// described in lldb/docs/dil-expr-lang.ebnf
+//
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Target/DILParser.h"
@@ -224,18 +229,7 @@ static bool GetPathToBaseType(CompilerType type, CompilerType target_base,
   return false;
 }
 
-struct MemberInfo {
-  std::optional<std::string> name;
-  CompilerType type;
-  bool is_bitfield;
-  uint32_t bitfield_size_in_bits;
-  bool is_synthetic;
-
-  explicit operator bool() const { return type.IsValid(); }
-};
-
-
-static uint32_t GetNumberOfNonEmptyBaseClasses(CompilerType type) {
+uint32_t GetNumberOfNonEmptyBaseClasses(CompilerType type) {
   // Go through the base classes and count non-empty ones.
   uint32_t ret = 0;
   uint32_t num_direct_bases = type.GetNumDirectBaseClasses();
@@ -251,12 +245,12 @@ static uint32_t GetNumberOfNonEmptyBaseClasses(CompilerType type) {
   return ret;
 }
 
-static MemberInfo GetFieldWithNameIndexPath(lldb::ValueObjectSP lhs_val_sp,
-                                            CompilerType type,
-                                            const std::string& name,
-                                            std::vector<uint32_t>* idx,
-                                            CompilerType empty_type,
-                                            bool use_synthetic) {
+DILMemberInfo GetFieldWithNameIndexPath(lldb::ValueObjectSP lhs_val_sp,
+                                        CompilerType type,
+                                        const std::string& name,
+                                        std::vector<uint32_t>* idx,
+                                        CompilerType empty_type,
+                                        bool use_synthetic) {
   bool is_synthetic = false;
   // Go through the fields first.
   uint32_t num_fields = type.GetNumFields();
@@ -271,8 +265,8 @@ static MemberInfo GetFieldWithNameIndexPath(lldb::ValueObjectSP lhs_val_sp,
     auto field_name = name_sstr.length() == 0 ? std::optional<std::string>()
                                               : name_sstr;
     if (field_type.IsValid()) {
-      struct MemberInfo field = {field_name, field_type, is_bitfield,
-        bitfield_bit_size, is_synthetic };
+      struct DILMemberInfo field = {field_name, field_type, is_bitfield,
+        bitfield_bit_size, is_synthetic};
 
       // Name can be null if this is a padding field.
       if (field.name == name) {
@@ -344,7 +338,8 @@ static MemberInfo GetFieldWithNameIndexPath(lldb::ValueObjectSP lhs_val_sp,
       child_valobj_sp = child_valobj_sp->GetChildMemberWithName(name);
       CompilerType field_type = child_valobj_sp->GetCompilerType();
       if (field_type.IsValid()) {
-        struct MemberInfo field = {name, field_type, false, 0, is_synthetic};
+        struct DILMemberInfo field = {name, field_type, false, 0,
+          is_synthetic};
         if (idx) {
           assert(idx->empty());
           idx->push_back(child_idx);
@@ -357,12 +352,14 @@ static MemberInfo GetFieldWithNameIndexPath(lldb::ValueObjectSP lhs_val_sp,
   return {{}, empty_type, false, 0};
 }
 
-static std::tuple<MemberInfo, std::vector<uint32_t>> GetMemberInfo (
-    lldb::ValueObjectSP lhs_val_sp, CompilerType type, const std::string& name,
+std::tuple<DILMemberInfo, std::vector<uint32_t>> GetMemberInfo (
+    lldb::ValueObjectSP lhs_val_sp,
+    CompilerType type,
+    const std::string& name,
     bool use_synthetic) {
   std::vector<uint32_t> idx;
   CompilerType empty_type;
-  MemberInfo member =
+  DILMemberInfo member =
       GetFieldWithNameIndexPath(lhs_val_sp, type, name, &idx, empty_type,
                                 use_synthetic);
   std::reverse(idx.begin(), idx.end());
@@ -376,7 +373,7 @@ DILSourceManager::DILSourceManager(std::string expr) : m_expr(std::move(expr))
   m_smff = std::make_unique<clang::SourceManagerForFile>("<expr>", m_expr);
 
   // Disable default diagnostics reporting.
-  // TODO(werat): Add custom consumer to keep track of errors.
+  // TODO: Add custom consumer to keep track of errors.
   clang::DiagnosticsEngine& de = m_smff->get().getDiagnostics();
   de.setClient(new clang::IgnoringDiagConsumer);
 }
@@ -450,57 +447,63 @@ bool IsSmartPtrType(CompilerType type) {
          k_libcxx_std_weak_ptr_regex_2.match(name);
 }
 
-bool IsArrayType(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.IsArrayType(nullptr, nullptr, nullptr);
-}
-
 bool IsInteger(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.GetTypeInfo() & lldb::eTypeIsInteger;
-}
-
-bool IsScalar(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.GetTypeInfo() & lldb::eTypeIsScalar;
+  bool is_signed;
+  return type.IsIntegerType(is_signed);
 }
 
 bool IsFloat(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-  return type.GetTypeInfo() & lldb::eTypeIsFloat;
+  uint32_t count = 0;
+  bool is_complex = false;
+  return type.IsFloatingPointType(count, is_complex);
 }
 
 bool IsEnum(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.GetTypeInfo() & lldb::eTypeIsEnumeration;
-}
-
-bool IsScopedEnum(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.IsScopedEnumerationType();
+  bool is_signed;
+  return type.IsEnumerationType(is_signed);
 }
 
 bool IsUnscopedEnum(CompilerType type) {
-  return IsEnum(type) && !IsScopedEnum(type);
-}
-
-static bool IsScalarOrUnscopedEnum(CompilerType type) {
-  return IsScalar(type) || IsUnscopedEnum(type);
+  return IsEnum(type) && !type.IsScopedEnumerationType();
 }
 
 bool IsIntegerOrUnscopedEnum(CompilerType type) {
   return IsInteger(type) || IsUnscopedEnum(type);
+}
+
+bool IsNullPtrType(CompilerType type) {
+  if (!type.IsValid())
+    return false;
+
+  return type.GetCanonicalType().GetBasicTypeEnumeration() ==
+      lldb::eBasicTypeNullPtr;
+}
+
+bool IsBool(CompilerType type) {
+  if (!type.IsValid())
+    return false;
+
+  return type.GetCanonicalType().GetBasicTypeEnumeration() ==
+      lldb::eBasicTypeBool;
+}
+
+static bool IsEnumerationIntegerTypeSigned(CompilerType type) {
+  if (type.IsValid()) {
+    return type.GetEnumerationIntegerType().GetTypeInfo()
+        & lldb::eTypeIsSigned;
+  }
+  return false;
+}
+
+bool IsSigned(CompilerType type) {
+  if (IsEnum(type)) {
+    return IsEnumerationIntegerTypeSigned(type);
+  }
+  return type.GetTypeInfo() & lldb::eTypeIsSigned;
+}
+
+static bool IsScalarOrUnscopedEnum(CompilerType type) {
+  return type.IsScalarType() || IsUnscopedEnum(type);
 }
 
 static bool IsPromotableIntegerType(CompilerType type) {
@@ -529,66 +532,12 @@ static bool IsPromotableIntegerType(CompilerType type) {
   }
 }
 
-static bool IsEnumerationIntegerTypeSigned(CompilerType type) {
-  if (type.IsValid()) {
-    return type.GetEnumerationIntegerType().GetTypeInfo()
-        & lldb::eTypeIsSigned;
-  }
-  return false;
-}
-
-bool IsSigned(CompilerType type) {
-  if (IsEnum(type)) {
-    return IsEnumerationIntegerTypeSigned(type);
-  }
-  return type.GetTypeInfo() & lldb::eTypeIsSigned;
-}
-
-bool IsPointerType(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.IsPointerType();
-}
-
-bool IsNullPtrType(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.GetCanonicalType().GetBasicTypeEnumeration() ==
-      lldb::eBasicTypeNullPtr;
-}
-
-bool IsReferenceType(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.IsReferenceType();
-}
-
-static CompilerType GetPointeeType(CompilerType type) {
-  CompilerType bad_type;
-  if (!type.IsValid())
-    return bad_type;
-
-  CompilerType c_type = type.GetPointeeType();
-  return c_type;
-}
-
 static bool IsPointerToVoid(CompilerType type) {
   if (!type.IsValid())
     return false;
 
-  return IsPointerType(type) && GetPointeeType(type).GetBasicTypeEnumeration()
-      == lldb::eBasicTypeVoid;
-}
-
-bool IsBool(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.GetCanonicalType().GetBasicTypeEnumeration() ==
-      lldb::eBasicTypeBool;
+  return type.IsPointerType() &&
+      type.GetPointeeType().GetBasicTypeEnumeration() == lldb::eBasicTypeVoid;
 }
 
 static bool IsRecordType(CompilerType type) {
@@ -598,7 +547,6 @@ static bool IsRecordType(CompilerType type) {
   return type.GetCanonicalType().GetTypeClass() &
       (lldb::eTypeClassClass | lldb::eTypeClassStruct | lldb::eTypeClassUnion);
 }
-
 
 // Checks whether `target_base` is a virtual base of `type` (direct or
 // indirect). If it is, stores the first virtual base type on the path from
@@ -637,22 +585,16 @@ static bool IsVirtualBase(CompilerType type, CompilerType target_base,
   return false;
 }
 
-static bool IsPolymorphicClass(CompilerType type) {
-  if (!type.IsValid())
-    return false;
-
-  return type.IsPolymorphicClass();
-}
-
 static bool IsContextuallyConvertibleToBool(CompilerType type) {
   if (!type.IsValid())
     return false;
 
-  return IsScalar(type) || IsUnscopedEnum(type) || IsPointerType(type)
-      || IsNullPtrType(type) || IsArrayType(type);
+  return type.IsScalarType() || IsUnscopedEnum(type) || type.IsPointerType()
+      || IsNullPtrType(type) || type.IsArrayType();
 }
 
-static CompilerType GetTemplateArgumentType(uint32_t idx, CompilerType this_type)
+static CompilerType GetTemplateArgumentType(uint32_t idx,
+                                            CompilerType this_type)
 {
   CompilerType bad_type;
   if (!this_type.IsValid())
@@ -684,48 +626,6 @@ static CompilerType GetSmartPtrPointeeType(CompilerType type) {
   return GetTemplateArgumentType(0, type);
 }
 
-
-static CompilerType GetPointerType(CompilerType type) {
-  CompilerType bad_type;
-  if (!type.IsValid())
-    return bad_type;
-
-  return type.GetPointerType();
-}
-
-static CompilerType GetDereferencedType(CompilerType type) {
-  CompilerType bad_type;
-  if (!type.IsValid())
-    return bad_type;
-
-  return type.GetNonReferenceType();
-}
-
-
-static CompilerType GetEnumerationIntegerType(CompilerType type) {
-  CompilerType bad_type;
-  if (type.IsValid()) {
-    return type.GetEnumerationIntegerType();
-  }
-  return bad_type;;
-}
-
-static CompilerType GetReferenceType(CompilerType type) {
-  CompilerType bad_type;
-  if (!type.IsValid())
-    return bad_type;
-
-  return type.GetLValueReferenceType();
-}
-
-static CompilerType GetUnqualifiedType(CompilerType type) {
-  CompilerType bad_type;
-  if (!type.IsValid())
-    return bad_type;
-
-  return type.GetFullyUnqualifiedType();
-}
-
 static bool TokenEndsTemplateArgumentList(const clang::Token& token) {
   // Note: in C++11 ">>" can be treated as "> >" and thus be a valid token
   // for the template argument list.
@@ -739,17 +639,16 @@ static ExprResult InsertSmartPtrToPointerConversion(ExprResult expr) {
   assert(
       IsSmartPtrType(expr_type) &&
       "an argument to smart-ptr-to-pointer conversion must be a smart pointer");
-
   return std::make_unique<SmartPtrToPtrDecay>(
-      expr->location(), GetPointerType(GetSmartPtrPointeeType(expr_type)),
+      expr->location(), GetSmartPtrPointeeType(expr_type).GetPointerType(),
       std::move(expr));
 }
 
 static ExprResult InsertArrayToPointerConversion(ExprResult expr) {
-  assert(IsArrayType(expr->result_type_deref()) &&
+  assert(expr->result_type_deref().IsArrayType() &&
          "an argument to array-to-pointer conversion must be an array");
 
-  // TODO(werat): Make this an explicit array-to-pointer conversion instead of
+  // TODO: Make this an explicit array-to-pointer conversion instead of
   // using a "generic" CStyleCastNode.
   return std::make_unique<CStyleCastNode>(
       expr->location(),
@@ -769,7 +668,7 @@ static CompilerType DoIntegralPromotion(
 
   if (IsUnscopedEnum(from)) {
     // Get the enumeration underlying type and promote it.
-    return DoIntegralPromotion(ctx, GetEnumerationIntegerType(from));
+    return DoIntegralPromotion(ctx, from.GetEnumerationIntegerType());
   }
 
   // At this point the type should an integer.
@@ -869,7 +768,7 @@ static ExprResult UsualUnaryConversions(
     }
   }
 
-  if (IsArrayType(result_type)) {
+  if (result_type.IsArrayType()) {
     expr = InsertArrayToPointerConversion(std::move(expr));
   }
 
@@ -877,7 +776,7 @@ static ExprResult UsualUnaryConversions(
     auto promoted_type = DoIntegralPromotion(ctx, result_type);
 
     // Insert a cast if the type promotion is happening.
-    // TODO(werat): Make this an implicit static_cast.
+    // TODO: Make this an implicit static_cast.
     if (!CompareTypes(promoted_type, result_type)) {
       expr = std::make_unique<CStyleCastNode>(expr->location(), promoted_type,
                                               std::move(expr),
@@ -1002,7 +901,7 @@ static CompilerType UsualArithmeticConversions(
   }
 
   // If either of the operands is not arithmetic (e.g. pointer), we're done.
-  if (!IsScalar(lhs_type) || !IsScalar(rhs_type)) {
+  if (!lhs_type.IsScalarType() || !rhs_type.IsScalarType()) {
     CompilerType bad_type;
     return bad_type;
   }
@@ -1197,7 +1096,7 @@ lldb::BasicType PickCharType(const clang::StringLiteralParser& literal) {
 DILParser::DILParser(std::shared_ptr<DILSourceManager> dil_sm,
                      std::shared_ptr<ExecutionContextScope> exe_ctx_scope,
                      bool use_synthetic)
-    : m_sm(dil_sm), m_ctx_scope(exe_ctx_scope), m_use_synthetic(use_synthetic)
+    : m_ctx_scope(exe_ctx_scope), m_sm(dil_sm), m_use_synthetic(use_synthetic)
 {
   clang::SourceManager& sm = dil_sm->GetSourceManager();;
   clang::DiagnosticsEngine& de = sm.getDiagnostics();
@@ -1268,7 +1167,7 @@ CompilerType DILParser::ResolveTypeDeclarators(
   for (auto& [tk, loc] : ptr_operators) {
     if (tk == clang::tok::star) {
       // Pointers to reference types are forbidden.
-      if (IsReferenceType(type)) {
+      if (type.IsReferenceType()) {
         BailOut(ErrorCode::kInvalidOperandType,
                 llvm::formatv("'type name' declared as a pointer to a "
                               "reference of type {0}",
@@ -1277,17 +1176,17 @@ CompilerType DILParser::ResolveTypeDeclarators(
         return bad_type;
       }
       // Get pointer type for the base type: e.g. int* -> int**.
-      type = GetPointerType(type);
+      type = type.GetPointerType();
 
     } else if (tk == clang::tok::amp) {
       // References to references are forbidden.
-      if (IsReferenceType(type)) {
+      if (type.IsReferenceType()) {
         BailOut(ErrorCode::kInvalidOperandType,
                 "type name declared as a reference to a reference", loc);
         return bad_type;
       }
       // Get reference type for the base type: e.g. int -> int&.
-      type = GetReferenceType(type);
+      type = type.GetLValueReferenceType();
     }
   }
 
@@ -1562,14 +1461,14 @@ ExprResult DILParser::ParseExpression() { return ParseAssignmentExpression(); }
 ExprResult DILParser::ParseAssignmentExpression() {
   auto lhs = ParseLogicalOrExpression();
 
-  // Check if it's an assingment expression.
+  // Check if it's an assignment expression.
   if (m_token.isOneOf(clang::tok::equal, clang::tok::starequal,
                      clang::tok::slashequal, clang::tok::percentequal,
                      clang::tok::plusequal, clang::tok::minusequal,
                      clang::tok::greatergreaterequal, clang::tok::lesslessequal,
                      clang::tok::ampequal, clang::tok::caretequal,
                      clang::tok::pipeequal)) {
-    // That's an assingment!
+    // That's an assignment!
     clang::Token token = m_token;
     ConsumeToken();
     auto rhs = ParseAssignmentExpression();
@@ -1779,14 +1678,12 @@ ExprResult DILParser::ParseAdditiveExpression() {
 //
 ExprResult DILParser::ParseMultiplicativeExpression() {
   auto lhs = ParseCastExpression();
-  // auto lhs = ParseUnaryExpression(); // Question: Andy, is this right?
 
   while (m_token.isOneOf(clang::tok::star, clang::tok::slash,
                         clang::tok::percent)) {
     clang::Token token = m_token;
     ConsumeToken();
     auto rhs = ParseCastExpression();
-    // auto rhs = ParseUnaryExpression(); // Question: Andy, is this right?
     lhs = BuildBinaryOp(clang_token_kind_to_binary_op_kind(token.getKind()),
                         std::move(lhs), std::move(rhs), token.getLocation());
   }
@@ -1871,7 +1768,6 @@ ExprResult DILParser::ParseUnaryExpression() {
     clang::SourceLocation loc = token.getLocation();
     ConsumeToken();
     auto rhs = ParseCastExpression();
-    // auto rhs = ParseUnaryExpression();
 
     switch (token.getKind()) {
       case clang::tok::plusplus:
@@ -2397,6 +2293,325 @@ bool DILParser::ParseTypeSpecifier(TypeDeclaration* type_decl) {
   return false;
 }
 
+// Parse nested_name_specifier.
+//
+//  nested_name_specifier:
+//    type_name "::"
+//    namespace_name '::'
+//    nested_name_specifier identifier "::"
+//    nested_name_specifier simple_template_id "::"
+//
+std::string DILParser::ParseNestedNameSpecifier() {
+  // The first token in nested_name_specifier is always an identifier, or
+  // '(anonymous namespace)'.
+  if (m_token.isNot(clang::tok::identifier) &&
+      m_token.isNot(clang::tok::l_paren)) {
+    return "";
+  }
+
+  // Anonymous namespaces need to be treated specially: They are represented
+  // the the string '(anonymous namespace)', which has a space in it (throwing
+  // of normal parsing) and is not actually proper C++> Check to see if we're
+  // looking at '(anonymous namespace)::...'
+  if (m_token.is(clang::tok::l_paren)) {
+    // Look for all the pieces, in order:
+    // l_paren 'anonymous' 'namespace' r_paren coloncolon
+    if (m_pp->LookAhead(0).is(clang::tok::identifier)
+        && (m_pp->getSpelling(m_pp->LookAhead(0)) == "anonymous")
+        && m_pp->LookAhead(1).is(clang::tok::kw_namespace)
+        && m_pp->LookAhead(2).is(clang::tok::r_paren)
+        && m_pp->LookAhead(3).is(clang::tok::coloncolon)) {
+      ConsumeToken(); // l_paren
+      ConsumeToken(); // identifier 'anonymous'
+      ConsumeToken(); // keyword 'namespace'
+      ConsumeToken(); // r_paren
+      ConsumeToken(); // coloncolon
+
+      assert ((m_token.is(clang::tok::identifier)
+               || m_token.is(clang::tok::l_paren)) &&
+              "Expected an identifier or anonymous namespace, but not found.");
+      // Continue parsing the nested_namespace_specifier.
+      std::string identifier2 = ParseNestedNameSpecifier();
+      if (identifier2.empty()) {
+        Expect(clang::tok::identifier);
+        identifier2 = m_pp->getSpelling(m_token);
+        ConsumeToken();
+      }
+      return "(anonymous namespace)::" + identifier2;
+    } else {
+      return "";
+    }
+  } // end of special handling for '(anonymous namespace)'
+
+  // If the next token is scope ("::"), then this is indeed a
+  // nested_name_specifier
+  if (m_pp->LookAhead(0).is(clang::tok::coloncolon)) {
+    // This nested_name_specifier is a single identifier.
+    std::string identifier = m_pp->getSpelling(m_token);
+    ConsumeToken();
+    Expect(clang::tok::coloncolon);
+    ConsumeToken();
+    // Continue parsing the nested_name_specifier.
+    return identifier + "::" + ParseNestedNameSpecifier();
+  }
+
+  // If the next token starts a template argument list, then we have a
+  // simple_template_id here.
+  if (m_pp->LookAhead(0).is(clang::tok::less)) {
+    // We don't know whether this will be a nested_name_identifier or just a
+    // type_name. Prepare to rollback if this is not a nested_name_identifier.
+    TentativeParsingAction tentative_parsing(this);
+
+    // TODO: Parse just the simple_template_id?
+    auto type_name = ParseTypeName();
+
+    // If we did parse the type_name successfully and it's followed by the scope
+    // operator ("::"), then this is indeed a nested_name_specifier. Commit the
+    // tentative parsing and continue parsing nested_name_specifier.
+    if (!type_name.empty() && m_token.is(clang::tok::coloncolon)) {
+      tentative_parsing.Commit();
+      ConsumeToken();
+      // Continue parsing the nested_name_specifier.
+      return type_name + "::" + ParseNestedNameSpecifier();
+    }
+
+    // Not a nested_name_specifier, but could be just a type_name or something
+    // else entirely. Rollback the parser and try a different path.
+    tentative_parsing.Rollback();
+  }
+
+  return "";
+}
+
+// Parse a type_name.
+//
+//  type_name:
+//    class_name
+//    enum_name
+//    typedef_name
+//    simple_template_id
+//
+//  class_name
+//    identifier
+//
+//  enum_name
+//    identifier
+//
+//  typedef_name
+//    identifier
+//
+//  simple_template_id:
+//    template_name "<" [template_argument_list] ">"
+//
+std::string DILParser::ParseTypeName() {
+  // Typename always starts with an identifier.
+  if (m_token.isNot(clang::tok::identifier)) {
+    return "";
+  }
+
+  // If the next token starts a template argument list, parse this type_name as
+  // a simple_template_id.
+  if (m_pp->LookAhead(0).is(clang::tok::less)) {
+    // Parse the template_name. In this case it's just an identifier.
+    std::string template_name = m_pp->getSpelling(m_token);
+    ConsumeToken();
+    // Consume the "<" token.
+    ConsumeToken();
+
+    // Short-circuit for missing template_argument_list.
+    if (m_token.is(clang::tok::greater)) {
+      ConsumeToken();
+      return llvm::formatv("{0}<>", template_name);
+    }
+
+    // Try parsing template_argument_list.
+    auto template_argument_list = ParseTemplateArgumentList();
+
+    if (m_token.is(clang::tok::greater)) {
+      // Single closing angle bracket is a valid end of the template argument
+      // list, just consume it.
+      ConsumeToken();
+
+    } else if (m_token.is(clang::tok::greatergreater)) {
+      // C++11 allows using ">>" in nested template argument lists and C++-style
+      // casts. In this case we alter change the token type to ">", but don't
+      // consume it -- it will be done on the outer level when completing the
+      // outer template argument list or C++-style cast.
+      m_token.setKind(clang::tok::greater);
+
+    } else {
+      // Not a valid end of the template argument list, failed to parse a
+      // simple_template_id
+      return "";
+    }
+
+    return llvm::formatv("{0}<{1}>", template_name, template_argument_list);
+  }
+
+  // Otherwise look for a class_name, enum_name or a typedef_name.
+  std::string identifier = m_pp->getSpelling(m_token);
+  ConsumeToken();
+
+  return identifier;
+}
+
+// Parse a template_argument_list.
+//
+//  template_argument_list:
+//    template_argument
+//    template_argument_list "," template_argument
+//
+std::string DILParser::ParseTemplateArgumentList() {
+  // Parse template arguments one by one.
+  std::vector<std::string> arguments;
+
+  do {
+    // Eat the comma if this is not the first iteration.
+    if (arguments.size() > 0) {
+      ConsumeToken();
+    }
+
+    // Try parsing a template_argument. If this fails, then this is actually not
+    // a template_argument_list.
+    auto argument = ParseTemplateArgument();
+    if (argument.empty()) {
+      return "";
+    }
+
+    arguments.push_back(argument);
+
+  } while (m_token.is(clang::tok::comma));
+
+  // Internally in LLDB/Clang nested template type names have extra spaces to
+  // avoid having ">>". Add the extra space before the closing ">" if the
+  // template argument is also a template.
+  if (arguments.back().back() == '>') {
+    arguments.back().push_back(' ');
+  }
+
+  return llvm::formatv("{0:$[, ]}",
+                       llvm::make_range(arguments.begin(), arguments.end()));
+}
+
+// Parse a template_argument.
+//
+//  template_argument:
+//    type_id
+//    numeric_literal
+//    id_expression
+//
+std::string DILParser::ParseTemplateArgument() {
+  // There is no way to know at this point whether there is going to be a
+  // type_id or something else. Try different options one by one.
+
+  {
+    // [temp.arg](http://eel.is/c++draft/temp.arg#2)
+    //
+    // In a template-argument, an ambiguity between a type-id and an expression
+    // is resolved to a type-id, regardless of the form of the corresponding
+    // template-parameter.
+
+    // Therefore, first try parsing type_id.
+    TentativeParsingAction tentative_parsing(this);
+
+    auto type_id = ParseTypeId();
+    if (type_id) {
+      tentative_parsing.Commit();
+
+      CompilerType type = type_id.value();
+      return type.IsValid()
+          ? std::string(type.GetTypeName().AsCString())
+          : "";
+
+    } else {
+      // Failed to parse a type_id. Rollback the parser and try something else.
+      tentative_parsing.Rollback();
+    }
+  }
+
+  {
+    // The next candidate is a numeric_literal.
+    TentativeParsingAction tentative_parsing(this);
+
+    // Parse a numeric_literal.
+    if (m_token.is(clang::tok::numeric_constant)) {
+      // TODO: Actually parse the literal, check if it's valid and
+      // canonize it (e.g. 8LL -> 8).
+      std::string numeric_literal = m_pp->getSpelling(m_token);
+      ConsumeToken();
+
+      if (TokenEndsTemplateArgumentList(m_token)) {
+        tentative_parsing.Commit();
+        return numeric_literal;
+      }
+    }
+
+    // Failed to parse a numeric_literal.
+    tentative_parsing.Rollback();
+  }
+
+  {
+    // The next candidate is an id_expression.
+    TentativeParsingAction tentative_parsing(this);
+
+    // Parse an id_expression.
+    auto id_expression = ParseIdExpression();
+
+    // If we've parsed the id_expression successfully and the next token can
+    // finish the template_argument, then we're done here.
+    if (!id_expression.empty() && TokenEndsTemplateArgumentList(m_token)) {
+      tentative_parsing.Commit();
+      return id_expression;
+    }
+    // Failed to parse a id_expression.
+    tentative_parsing.Rollback();
+  }
+
+  // TODO: Another valid option here is a constant_expression, but
+  // we definitely don't want to support constant arithmetic like "Foo<1+2>".
+  // We can probably use ParsePrimaryExpression here, but need to figure out the
+  // "stringification", since ParsePrimaryExpression returns ExprResult (and
+  // potentially a whole expression, not just a single constant.)
+
+  // This is not a template_argument.
+  return "";
+}
+
+// Parse a ptr_operator.
+//
+//  ptr_operator:
+//    "*" [cv_qualifier_seq]
+//    "&"
+//
+DILParser::PtrOperator DILParser::ParsePtrOperator() {
+  ExpectOneOf(clang::tok::star, clang::tok::amp);
+
+  PtrOperator ptr_operator;
+  if (m_token.is(clang::tok::star)) {
+    ptr_operator = std::make_tuple(clang::tok::star, m_token.getLocation());
+    ConsumeToken();
+
+    //
+    //  cv_qualifier_seq:
+    //    cv_qualifier [cv_qualifier_seq]
+    //
+    //  cv_qualifier:
+    //    "const"
+    //    "volatile"
+    //
+    while (IsCvQualifier(m_token)) {
+      // Just ignore CV quialifiers, we don't use them in type casting.
+      ConsumeToken();
+    }
+
+  } else if (m_token.is(clang::tok::amp)) {
+    ptr_operator = std::make_tuple(clang::tok::amp, m_token.getLocation());
+    ConsumeToken();
+  }
+
+  return ptr_operator;
+}
+
 // Parse an id_expression.
 //
 //  id_expression:
@@ -2628,325 +2843,6 @@ ExprResult DILParser::ParseIntegerLiteral(clang::NumericLiteralParser& literal,
                                        is_literal_zero);
 }
 
-// Parse nested_name_specifier.
-//
-//  nested_name_specifier:
-//    type_name "::"
-//    namespace_name '::'
-//    nested_name_specifier identifier "::"
-//    nested_name_specifier simple_template_id "::"
-//
-std::string DILParser::ParseNestedNameSpecifier() {
-  // The first token in nested_name_specifier is always an identifier, or
-  // '(anonymous namespace)'.
-  if (m_token.isNot(clang::tok::identifier) &&
-      m_token.isNot(clang::tok::l_paren)) {
-    return "";
-  }
-
-  // Anonymous namespaces need to be treated specially: They are represented
-  // the the string '(anonymous namespace)', which has a space in it (throwing
-  // of normal parsing) and is not actually proper C++> Check to see if we're
-  // looking at '(anonymous namespace)::...'
-  if (m_token.is(clang::tok::l_paren)) {
-    // Look for all the pieces, in order:
-    // l_paren 'anonymous' 'namespace' r_paren coloncolon
-    if (m_pp->LookAhead(0).is(clang::tok::identifier)
-        && (m_pp->getSpelling(m_pp->LookAhead(0)) == "anonymous")
-        && m_pp->LookAhead(1).is(clang::tok::kw_namespace)
-        && m_pp->LookAhead(2).is(clang::tok::r_paren)
-        && m_pp->LookAhead(3).is(clang::tok::coloncolon)) {
-      ConsumeToken(); // l_paren
-      ConsumeToken(); // identifier 'anonymous'
-      ConsumeToken(); // keyword 'namespace'
-      ConsumeToken(); // r_paren
-      ConsumeToken(); // coloncolon
-
-      assert ((m_token.is(clang::tok::identifier)
-               || m_token.is(clang::tok::l_paren)) &&
-              "Expected an identifier or anonymous namespace, but not found.");
-      // Continue parsing the nested_namespace_specifier.
-      std::string identifier2 = ParseNestedNameSpecifier();
-      if (identifier2.empty()) {
-        Expect(clang::tok::identifier);
-        identifier2 = m_pp->getSpelling(m_token);
-        ConsumeToken();
-      }
-      return "(anonymous namespace)::" + identifier2;
-    } else {
-      return "";
-    }
-  } // end of special handling for '(anonymous namespace)'
-
-  // If the next token is scope ("::"), then this is indeed a
-  // nested_name_specifier
-  if (m_pp->LookAhead(0).is(clang::tok::coloncolon)) {
-    // This nested_name_specifier is a single identifier.
-    std::string identifier = m_pp->getSpelling(m_token);
-    ConsumeToken();
-    Expect(clang::tok::coloncolon);
-    ConsumeToken();
-    // Continue parsing the nested_name_specifier.
-    return identifier + "::" + ParseNestedNameSpecifier();
-  }
-
-  // If the next token starts a template argument list, then we have a
-  // simple_template_id here.
-  if (m_pp->LookAhead(0).is(clang::tok::less)) {
-    // We don't know whether this will be a nested_name_identifier or just a
-    // type_name. Prepare to rollback if this is not a nested_name_identifier.
-    TentativeParsingAction tentative_parsing(this);
-
-    // TODO(werat): Parse just the simple_template_id?
-    auto type_name = ParseTypeName();
-
-    // If we did parse the type_name successfully and it's followed by the scope
-    // operator ("::"), then this is indeed a nested_name_specifier. Commit the
-    // tentative parsing and continue parsing nested_name_specifier.
-    if (!type_name.empty() && m_token.is(clang::tok::coloncolon)) {
-      tentative_parsing.Commit();
-      ConsumeToken();
-      // Continue parsing the nested_name_specifier.
-      return type_name + "::" + ParseNestedNameSpecifier();
-    }
-
-    // Not a nested_name_specifier, but could be just a type_name or something
-    // else entirely. Rollback the parser and try a different path.
-    tentative_parsing.Rollback();
-  }
-
-  return "";
-}
-
-// Parse a type_name.
-//
-//  type_name:
-//    class_name
-//    enum_name
-//    typedef_name
-//    simple_template_id
-//
-//  class_name
-//    identifier
-//
-//  enum_name
-//    identifier
-//
-//  typedef_name
-//    identifier
-//
-//  simple_template_id:
-//    template_name "<" [template_argument_list] ">"
-//
-std::string DILParser::ParseTypeName() {
-  // Typename always starts with an identifier.
-  if (m_token.isNot(clang::tok::identifier)) {
-    return "";
-  }
-
-  // If the next token starts a template argument list, parse this type_name as
-  // a simple_template_id.
-  if (m_pp->LookAhead(0).is(clang::tok::less)) {
-    // Parse the template_name. In this case it's just an identifier.
-    std::string template_name = m_pp->getSpelling(m_token);
-    ConsumeToken();
-    // Consume the "<" token.
-    ConsumeToken();
-
-    // Short-circuit for missing template_argument_list.
-    if (m_token.is(clang::tok::greater)) {
-      ConsumeToken();
-      return llvm::formatv("{0}<>", template_name);
-    }
-
-    // Try parsing template_argument_list.
-    auto template_argument_list = ParseTemplateArgumentList();
-
-    if (m_token.is(clang::tok::greater)) {
-      // Single closing angle bracket is a valid end of the template argument
-      // list, just consume it.
-      ConsumeToken();
-
-    } else if (m_token.is(clang::tok::greatergreater)) {
-      // C++11 allows using ">>" in nested template argument lists and C++-style
-      // casts. In this case we alter change the token type to ">", but don't
-      // consume it -- it will be done on the outer level when completing the
-      // outer template argument list or C++-style cast.
-      m_token.setKind(clang::tok::greater);
-
-    } else {
-      // Not a valid end of the template argument list, failed to parse a
-      // simple_template_id
-      return "";
-    }
-
-    return llvm::formatv("{0}<{1}>", template_name, template_argument_list);
-  }
-
-  // Otherwise look for a class_name, enum_name or a typedef_name.
-  std::string identifier = m_pp->getSpelling(m_token);
-  ConsumeToken();
-
-  return identifier;
-}
-
-// Parse a template_argument_list.
-//
-//  template_argument_list:
-//    template_argument
-//    template_argument_list "," template_argument
-//
-std::string DILParser::ParseTemplateArgumentList() {
-  // Parse template arguments one by one.
-  std::vector<std::string> arguments;
-
-  do {
-    // Eat the comma if this is not the first iteration.
-    if (arguments.size() > 0) {
-      ConsumeToken();
-    }
-
-    // Try parsing a template_argument. If this fails, then this is actually not
-    // a template_argument_list.
-    auto argument = ParseTemplateArgument();
-    if (argument.empty()) {
-      return "";
-    }
-
-    arguments.push_back(argument);
-
-  } while (m_token.is(clang::tok::comma));
-
-  // Internally in LLDB/Clang nested template type names have extra spaces to
-  // avoid having ">>". Add the extra space before the closing ">" if the
-  // template argument is also a template.
-  if (arguments.back().back() == '>') {
-    arguments.back().push_back(' ');
-  }
-
-  return llvm::formatv("{0:$[, ]}",
-                       llvm::make_range(arguments.begin(), arguments.end()));
-}
-
-// Parse a template_argument.
-//
-//  template_argument:
-//    type_id
-//    numeric_literal
-//    id_expression
-//
-std::string DILParser::ParseTemplateArgument() {
-  // There is no way to know at this point whether there is going to be a
-  // type_id or something else. Try different options one by one.
-
-  {
-    // [temp.arg](http://eel.is/c++draft/temp.arg#2)
-    //
-    // In a template-argument, an ambiguity between a type-id and an expression
-    // is resolved to a type-id, regardless of the form of the corresponding
-    // template-parameter.
-
-    // Therefore, first try parsing type_id.
-    TentativeParsingAction tentative_parsing(this);
-
-    auto type_id = ParseTypeId();
-    if (type_id) {
-      tentative_parsing.Commit();
-
-      CompilerType type = type_id.value();
-      return type.IsValid()
-          ? std::string(type.GetTypeName().AsCString())
-          : "";
-
-    } else {
-      // Failed to parse a type_id. Rollback the parser and try something else.
-      tentative_parsing.Rollback();
-    }
-  }
-
-  {
-    // The next candidate is a numeric_literal.
-    TentativeParsingAction tentative_parsing(this);
-
-    // Parse a numeric_literal.
-    if (m_token.is(clang::tok::numeric_constant)) {
-      // TODO(werat): Actually parse the literal, check if it's valid and
-      // canonize it (e.g. 8LL -> 8).
-      std::string numeric_literal = m_pp->getSpelling(m_token);
-      ConsumeToken();
-
-      if (TokenEndsTemplateArgumentList(m_token)) {
-        tentative_parsing.Commit();
-        return numeric_literal;
-      }
-    }
-
-    // Failed to parse a numeric_literal.
-    tentative_parsing.Rollback();
-  }
-
-  {
-    // The next candidate is an id_expression.
-    TentativeParsingAction tentative_parsing(this);
-
-    // Parse an id_expression.
-    auto id_expression = ParseIdExpression();
-
-    // If we've parsed the id_expression successfully and the next token can
-    // finish the template_argument, then we're done here.
-    if (!id_expression.empty() && TokenEndsTemplateArgumentList(m_token)) {
-      tentative_parsing.Commit();
-      return id_expression;
-    }
-    // Failed to parse a id_expression.
-    tentative_parsing.Rollback();
-  }
-
-  // TODO(b/164399865): Another valid option here is a constant_expression, but
-  // we definitely don't want to support constant arithmetic like "Foo<1+2>".
-  // We can probably use ParsePrimaryExpression here, but need to figure out the
-  // "stringification", since ParsePrimaryExpression returns ExprResult (and
-  // potentially a whole expression, not just a single constant.)
-
-  // This is not a template_argument.
-  return "";
-}
-
-// Parse a ptr_operator.
-//
-//  ptr_operator:
-//    "*" [cv_qualifier_seq]
-//    "&"
-//
-DILParser::PtrOperator DILParser::ParsePtrOperator() {
-  ExpectOneOf(clang::tok::star, clang::tok::amp);
-
-  PtrOperator ptr_operator;
-  if (m_token.is(clang::tok::star)) {
-    ptr_operator = std::make_tuple(clang::tok::star, m_token.getLocation());
-    ConsumeToken();
-
-    //
-    //  cv_qualifier_seq:
-    //    cv_qualifier [cv_qualifier_seq]
-    //
-    //  cv_qualifier:
-    //    "const"
-    //    "volatile"
-    //
-    while (IsCvQualifier(m_token)) {
-      // Just ignore CV quialifiers, we don't use them in type casting.
-      ConsumeToken();
-    }
-
-  } else if (m_token.is(clang::tok::amp)) {
-    ptr_operator = std::make_tuple(clang::tok::amp, m_token.getLocation());
-    ConsumeToken();
-  }
-
-  return ptr_operator;
-}
-
 // Parse a builtin_func.
 //
 //  builtin_func:
@@ -3035,15 +2931,15 @@ ExprResult DILParser::BuildCStyleCast(CompilerType type, ExprResult rhs,
   auto rhs_type = rhs->result_type_deref();
 
   // Cast to basic type (integer/float).
-  if (IsScalar(type)) {
+  if (type.IsScalarType()) {
     // Before casting arrays to scalar types, array-to-pointer conversion
     // should be performed.
-    if (IsArrayType(rhs_type)) {
+    if (rhs_type.IsArrayType()) {
       rhs = InsertArrayToPointerConversion(std::move(rhs));
       rhs_type = rhs->result_type_deref();
     }
     // Pointers can be cast to integers of the same or larger size.
-    if (IsPointerType(rhs_type) || IsNullPtrType(rhs_type)) {
+    if (rhs_type.IsPointerType() || IsNullPtrType(rhs_type)) {
       // C-style cast from pointer to float/double is not allowed.
       if (IsFloat(type)) {
         BailOut(ErrorCode::kInvalidOperandType,
@@ -3068,7 +2964,7 @@ ExprResult DILParser::BuildCStyleCast(CompilerType type, ExprResult rhs,
                 location);
         return std::make_unique<DILErrorNode>(bad_type);
       }
-    } else if (!IsScalar(rhs_type) && !IsEnum(rhs_type)) {
+    } else if (!rhs_type.IsScalarType() && !IsEnum(rhs_type)) {
       // Otherwise accept only arithmetic types and enums.
       BailOut(ErrorCode::kInvalidOperandType,
               llvm::formatv(
@@ -3081,7 +2977,7 @@ ExprResult DILParser::BuildCStyleCast(CompilerType type, ExprResult rhs,
 
   } else if (IsEnum(type)) {
     // Cast to enum type.
-    if (!IsScalar(rhs_type) && !IsEnum(rhs_type)) {
+    if (!rhs_type.IsScalarType() && !IsEnum(rhs_type)) {
       BailOut(ErrorCode::kInvalidOperandType,
               llvm::formatv("C-style cast from {0} to {1} is not allowed",
                             TypeDescription(rhs_type), TypeDescription(type)),
@@ -3090,10 +2986,10 @@ ExprResult DILParser::BuildCStyleCast(CompilerType type, ExprResult rhs,
     }
     kind = CStyleCastKind::kEnumeration;
 
-  } else if (IsPointerType(type)) {
+  } else if (type.IsPointerType()) {
     // Cast to pointer type.
     if (!IsInteger(rhs_type) && !IsEnum(rhs_type) &&
-        !IsArrayType(rhs_type) && !IsPointerType(rhs_type) &&
+        !rhs_type.IsArrayType() && !rhs_type.IsPointerType() &&
         !IsNullPtrType(rhs_type)) {
       BailOut(ErrorCode::kInvalidOperandType,
               llvm::formatv("cannot cast from type {0} to pointer type {1}",
@@ -3114,7 +3010,7 @@ ExprResult DILParser::BuildCStyleCast(CompilerType type, ExprResult rhs,
     }
     kind = CStyleCastKind::kNullptr;
 
-  } else if (IsReferenceType(type)) {
+  } else if (type.IsReferenceType()) {
     // Cast to a reference type.
     if (rhs->is_rvalue()) {
       BailOut(ErrorCode::kInvalidOperandType,
@@ -3145,7 +3041,7 @@ ExprResult DILParser::BuildCxxCast(clang::tok::TokenKind kind, CompilerType type
           kind == clang::tok::kw_reinterpret_cast) &&
          "invalid C++-style cast type");
 
-  // TODO(werat): Implement custom builders for all C++-style casts.
+  // TODO: Implement custom builders for all C++-style casts.
   if (kind == clang::tok::kw_dynamic_cast) {
     return BuildCxxDynamicCast(type, std::move(rhs), location);
   }
@@ -3163,7 +3059,7 @@ ExprResult DILParser::BuildCxxStaticCast(CompilerType type, ExprResult rhs,
   auto rhs_type = rhs->result_type_deref();
 
   // Perform implicit array-to-pointer conversion.
-  if (IsArrayType(rhs_type)) {
+  if (rhs_type.IsArrayType()) {
     rhs = InsertArrayToPointerConversion(std::move(rhs));
     rhs_type = rhs->result_type_deref();
   }
@@ -3174,15 +3070,15 @@ ExprResult DILParser::BuildCxxStaticCast(CompilerType type, ExprResult rhs,
                                                /*is_rvalue*/ true);
   }
 
-  if (IsScalar(type)) {
+  if (type.IsScalarType()) {
     return BuildCxxStaticCastToScalar(type, std::move(rhs), location);
   } else if (IsEnum(type)) {
     return BuildCxxStaticCastToEnum(type, std::move(rhs), location);
-  } else if (IsPointerType(type)) {
+  } else if (type.IsPointerType()) {
     return BuildCxxStaticCastToPointer(type, std::move(rhs), location);
   } else if (IsNullPtrType(type)) {
     return BuildCxxStaticCastToNullPtr(type, std::move(rhs), location);
-  } else if (IsReferenceType(type)) {
+  } else if (type.IsReferenceType()) {
     return BuildCxxStaticCastToReference(type, std::move(rhs), location);
   }
 
@@ -3202,7 +3098,7 @@ ExprResult DILParser::BuildCxxStaticCastToScalar(CompilerType type,
   auto rhs_type = rhs->result_type_deref();
   CompilerType bad_type;
 
-  if (IsPointerType(rhs_type) || IsNullPtrType(rhs_type)) {
+  if (rhs_type.IsPointerType() || IsNullPtrType(rhs_type)) {
     // Pointers can be casted to bools.
     if (!IsBool(type)) {
       BailOut(ErrorCode::kInvalidOperandType,
@@ -3211,7 +3107,7 @@ ExprResult DILParser::BuildCxxStaticCastToScalar(CompilerType type,
               location);
       return std::make_unique<DILErrorNode>(bad_type);
     }
-  } else if (!IsScalar(rhs_type) && !IsEnum(rhs_type)) {
+  } else if (!rhs_type.IsScalarType() && !IsEnum(rhs_type)) {
     // Otherwise accept only arithmetic types and enums.
     BailOut(
         ErrorCode::kInvalidOperandType,
@@ -3230,7 +3126,7 @@ ExprResult DILParser::BuildCxxStaticCastToEnum(CompilerType type, ExprResult rhs
                                                clang::SourceLocation location) {
   auto rhs_type = rhs->result_type_deref();
 
-  if (!IsScalar(rhs_type) && !IsEnum(rhs_type)) {
+  if (!rhs_type.IsScalarType() && !IsEnum(rhs_type)) {
     BailOut(ErrorCode::kInvalidOperandType,
             llvm::formatv("static_cast from {0} to {1} is not allowed",
                           TypeDescription(rhs_type), TypeDescription(type)),
@@ -3251,9 +3147,9 @@ ExprResult DILParser::BuildCxxStaticCastToPointer(CompilerType type,
   CompilerType bad_type;
   auto rhs_type = rhs->result_type_deref();
 
-  if (IsPointerType(rhs_type)) {
-    auto type_pointee = GetPointeeType(type);
-    auto rhs_type_pointee = GetPointeeType(rhs_type);
+  if (rhs_type.IsPointerType()) {
+    auto type_pointee = type.GetPointeeType();
+    auto rhs_type_pointee = rhs_type.GetPointeeType();
 
     if (IsRecordType(type_pointee) && IsRecordType(rhs_type_pointee)) {
       return BuildCxxStaticCastForInheritedTypes(type, std::move(rhs),
@@ -3306,7 +3202,7 @@ ExprResult DILParser::BuildCxxStaticCastToReference(
     clang::SourceLocation location) {
   CompilerType bad_type;
   auto rhs_type = rhs->result_type_deref();
-  auto type_deref = GetDereferencedType(type);
+  auto type_deref = type.GetNonReferenceType();
 
   if (rhs->is_rvalue()) {
     BailOut(ErrorCode::kNotImplemented,
@@ -3336,16 +3232,16 @@ ExprResult DILParser::BuildCxxStaticCastToReference(
 
 ExprResult DILParser::BuildCxxStaticCastForInheritedTypes(
     CompilerType type, ExprResult rhs, clang::SourceLocation location) {
-  assert((IsPointerType(type) || IsReferenceType(type)) &&
+  assert((type.IsPointerType() || type.IsReferenceType()) &&
          "target type should either be a pointer or a reference");
 
   CompilerType bad_type;
   auto rhs_type = rhs->result_type_deref();
-  auto record_type = IsPointerType(type)
-                     ? GetPointeeType(type)
-                     : GetDereferencedType(type);
+  auto record_type = type.IsPointerType()
+                     ? type.GetPointeeType()
+                     : type.GetNonReferenceType();
   auto rhs_record_type =
-      IsPointerType(rhs_type) ? GetPointeeType(rhs_type) : rhs_type;
+      rhs_type.IsPointerType() ? rhs_type.GetPointeeType() : rhs_type;
 
   assert(IsRecordType(record_type) && IsRecordType(rhs_record_type) &&
          "underlying RHS and target types should be record types");
@@ -3353,7 +3249,7 @@ ExprResult DILParser::BuildCxxStaticCastForInheritedTypes(
          "underlying RHS and target types should be different");
 
   // Result of cast to reference type is an lvalue.
-  bool is_rvalue = !IsReferenceType(type);
+  bool is_rvalue = !type.IsReferenceType();
 
   // Handle derived-to-base conversion.
   std::vector<uint32_t> idx;
@@ -3401,7 +3297,7 @@ ExprResult DILParser::BuildCxxReinterpretCast(CompilerType type, ExprResult rhs,
   auto rhs_type = rhs->result_type_deref();
   bool is_rvalue = true;
 
-  if (IsScalar(type)) {
+  if (type.IsScalarType()) {
     // reinterpret_cast doesn't support non-integral scalar types.
     if (!IsInteger(type)) {
       BailOut(ErrorCode::kInvalidOperandType,
@@ -3412,12 +3308,12 @@ ExprResult DILParser::BuildCxxReinterpretCast(CompilerType type, ExprResult rhs,
     }
 
     // Perform implicit conversions.
-    if (IsArrayType(rhs_type)) {
+    if (rhs_type.IsArrayType()) {
       rhs = InsertArrayToPointerConversion(std::move(rhs));
       rhs_type = rhs->result_type_deref();
     }
 
-    if (IsPointerType(rhs_type) || IsNullPtrType(rhs_type)) {
+    if (rhs_type.IsPointerType() || IsNullPtrType(rhs_type)) {
       // A pointer can be converted to any integral type large enough to hold
       // its value.
       uint64_t type_byte_size = 0;
@@ -3452,12 +3348,12 @@ ExprResult DILParser::BuildCxxReinterpretCast(CompilerType type, ExprResult rhs,
       return std::make_unique<DILErrorNode>(bad_type);
     }
 
-  } else if (IsPointerType(type)) {
+  } else if (type.IsPointerType()) {
     // Integral, enumeration and other pointer types can be converted to any
     // pointer type.
     // TODO: Implement an explicit node for array-to-pointer conversions.
     if (!IsInteger(rhs_type) && !IsEnum(rhs_type) &&
-        !IsArrayType(rhs_type) && !IsPointerType(rhs_type)) {
+        !rhs_type.IsArrayType() && !rhs_type.IsPointerType()) {
       BailOut(ErrorCode::kInvalidOperandType,
               llvm::formatv("reinterpret_cast from {0} to {1} is not allowed",
                             TypeDescription(rhs_type), TypeDescription(type)),
@@ -3473,7 +3369,7 @@ ExprResult DILParser::BuildCxxReinterpretCast(CompilerType type, ExprResult rhs,
             location);
     return std::make_unique<DILErrorNode>(bad_type);
 
-  } else if (IsReferenceType(type)) {
+  } else if (type.IsReferenceType()) {
     // L-values can be converted to any reference type.
     if (rhs->is_rvalue()) {
       BailOut(
@@ -3503,10 +3399,10 @@ ExprResult DILParser::BuildCxxDynamicCast(CompilerType type, ExprResult rhs,
                                           clang::SourceLocation location) {
   CompilerType pointee_type;
   CompilerType bad_type;
-  if (IsPointerType(type)) {
-    pointee_type = GetPointeeType(type);
-  } else if (IsReferenceType(type)) {
-    pointee_type = GetDereferencedType(type);
+  if (type.IsPointerType()) {
+    pointee_type = type.GetPointeeType();
+  } else if (type.IsReferenceType()) {
+    pointee_type = type.GetNonReferenceType();
   } else {
     // Dynamic casts are allowed only for pointers and references.
     BailOut(
@@ -3527,10 +3423,10 @@ ExprResult DILParser::BuildCxxDynamicCast(CompilerType type, ExprResult rhs,
   }
 
   auto expr_type = rhs->result_type();
-  if (IsPointerType(expr_type)) {
-    expr_type = GetPointeeType(expr_type);
-  } else if (IsReferenceType(expr_type)) {
-    expr_type = GetDereferencedType(expr_type);
+  if (expr_type.IsPointerType()) {
+    expr_type = expr_type.GetPointeeType();
+  } else if (expr_type.IsReferenceType()) {
+    expr_type = expr_type.GetNonReferenceType();
   } else {
     // Expression type must be a pointer or a reference.
     BailOut(ErrorCode::kInvalidOperandType,
@@ -3549,7 +3445,7 @@ ExprResult DILParser::BuildCxxDynamicCast(CompilerType type, ExprResult rhs,
   }
 
   // Expr type must be polymorphic.
-  if (!IsPolymorphicClass(expr_type)) {
+  if (!expr_type.IsPolymorphicClass()) {
     BailOut(ErrorCode::kInvalidOperandType,
             llvm::formatv("{0} is not polymorphic", TypeDescription(expr_type)),
             location);
@@ -3571,14 +3467,14 @@ ExprResult DILParser::BuildUnaryOp(UnaryOpKind kind, ExprResult rhs,
 
   switch (kind) {
     case UnaryOpKind::Deref: {
-      if (IsPointerType(rhs_type)) {
-        result_type = GetPointeeType(rhs_type);
+      if (rhs_type.IsPointerType()) {
+        result_type = rhs_type.GetPointeeType();
       } else if (IsSmartPtrType(rhs_type)) {
         rhs = InsertSmartPtrToPointerConversion(std::move(rhs));
-        result_type = GetPointeeType(rhs->result_type_deref());
-      } else if (IsArrayType(rhs_type)) {
+        result_type = rhs->result_type_deref().GetPointeeType();
+      } else if (rhs_type.IsArrayType()) {
         rhs = InsertArrayToPointerConversion(std::move(rhs));
-        result_type = GetPointeeType(rhs->result_type_deref());
+        result_type = rhs->result_type_deref().GetPointeeType();
       } else {
         BailOut(
             ErrorCode::kInvalidOperandType,
@@ -3603,16 +3499,16 @@ ExprResult DILParser::BuildUnaryOp(UnaryOpKind kind, ExprResult rhs,
                 "address of bit-field requested", location);
         return std::make_unique<DILErrorNode>(bad_type);
       }
-      result_type = GetPointerType(rhs_type);
+      result_type = rhs_type.GetPointerType();
       break;
     }
     case UnaryOpKind::Plus:
     case UnaryOpKind::Minus: {
       rhs = UsualUnaryConversions(m_ctx_scope, std::move(rhs));
       rhs_type = rhs->result_type_deref();
-      if (IsScalar(rhs_type) ||
+      if (rhs_type.IsScalarType() ||
           // Unary plus is allowed for pointers.
-          (kind == UnaryOpKind::Plus && IsPointerType(rhs_type))) {
+          (kind == UnaryOpKind::Plus && rhs_type.IsPointerType())) {
         result_type = rhs->result_type();
       }
       break;
@@ -3657,7 +3553,7 @@ ExprResult DILParser::BuildUnaryOp(UnaryOpKind kind, ExprResult rhs,
 ExprResult DILParser::BuildBinaryOp(BinaryOpKind kind, ExprResult lhs,
                                  ExprResult rhs,
                                  clang::SourceLocation location) {
-  // TODO(werat): Get the "original" type (i.e. the one before implicit casts)
+  // TODO: Get the "original" type (i.e. the one before implicit casts)
   // from the ExprResult.
   auto orig_lhs_type = lhs->result_type_deref();
   auto orig_rhs_type = rhs->result_type_deref();
@@ -3824,11 +3720,11 @@ ExprResult DILParser::BuildTernaryOp(ExprResult cond, ExprResult lhs,
   }
 
   // Apply array-to-pointer implicit conversions.
-  if (IsArrayType(lhs_type)) {
+  if (lhs_type.IsArrayType()) {
     lhs = InsertArrayToPointerConversion(std::move(lhs));
     lhs_type = lhs->result_type_deref();
   }
-  if (IsArrayType(rhs_type)) {
+  if (rhs_type.IsArrayType()) {
     rhs = InsertArrayToPointerConversion(std::move(rhs));
     rhs_type = rhs->result_type_deref();
   }
@@ -3841,7 +3737,7 @@ ExprResult DILParser::BuildTernaryOp(ExprResult cond, ExprResult lhs,
 
   // If one operand is a pointer and the other is a nullptr or literal zero,
   // convert the nullptr operand to pointer type.
-  if (IsPointerType(lhs_type) &&
+  if (lhs_type.IsPointerType() &&
       (rhs->is_literal_zero() || IsNullPtrType(rhs_type))) {
     rhs = std::make_unique<CStyleCastNode>(
         rhs->location(), lhs_type, std::move(rhs), CStyleCastKind::kPointer);
@@ -3850,7 +3746,7 @@ ExprResult DILParser::BuildTernaryOp(ExprResult cond, ExprResult lhs,
                                            std::move(lhs), std::move(rhs));
   }
   if ((lhs->is_literal_zero() || IsNullPtrType(lhs_type)) &&
-      IsPointerType(rhs_type)) {
+      rhs_type.IsPointerType()) {
     lhs = std::make_unique<CStyleCastNode>(
         lhs->location(), rhs_type, std::move(lhs), CStyleCastKind::kPointer);
 
@@ -3895,16 +3791,16 @@ ExprResult DILParser::BuildBinarySubscript(ExprResult lhs, ExprResult rhs,
   auto lhs_type = lhs->result_type_deref();
   auto rhs_type = rhs->result_type_deref();
 
-  if (IsArrayType(lhs_type)) {
+  if (lhs_type.IsArrayType()) {
     base = InsertArrayToPointerConversion(std::move(lhs));
     index = std::move(rhs);
-  } else if (IsPointerType(lhs_type)) {
+  } else if (lhs_type.IsPointerType()) {
     base = std::move(lhs);
     index = std::move(rhs);
-  } else if (IsArrayType(rhs_type)) {
+  } else if (rhs_type.IsArrayType()) {
     base = InsertArrayToPointerConversion(std::move(rhs));
     index = std::move(lhs);
-  } else if (IsPointerType(rhs_type)) {
+  } else if (rhs_type.IsPointerType()) {
     base = std::move(rhs);
     index = std::move(lhs);
   } else {
@@ -3949,7 +3845,7 @@ ExprResult DILParser::BuildBinarySubscript(ExprResult lhs, ExprResult rhs,
   }
 
   return std::make_unique<ArraySubscriptNode>(
-      location, GetPointeeType(base->result_type_deref()), std::move(base),
+      location, base->result_type_deref().GetPointeeType(), std::move(base),
       std::move(index));
 }
 
@@ -3962,8 +3858,8 @@ ExprResult DILParser::BuildMemberOf(ExprResult lhs, std::string member_id,
   if (is_arrow) {
     // "member of pointer" operator, check that LHS is a pointer and
     // dereference it.
-    if (!IsPointerType(lhs_type) && !IsSmartPtrType(lhs_type) &&
-        !IsArrayType(lhs_type)) {
+    if (!lhs_type.IsPointerType() && !IsSmartPtrType(lhs_type) &&
+        !lhs_type.IsArrayType()) {
       BailOut(ErrorCode::kInvalidOperandType,
               llvm::formatv("member reference type {0} is not a pointer; did "
                             "you mean to use '.'?",
@@ -3976,16 +3872,16 @@ ExprResult DILParser::BuildMemberOf(ExprResult lhs, std::string member_id,
       // If LHS is a smart pointer, decay it to an underlying object.
       lhs = InsertSmartPtrToPointerConversion(std::move(lhs));
       lhs_type = lhs->result_type_deref();
-    } else if (IsArrayType(lhs_type)) {
+    } else if (lhs_type.IsArrayType()) {
       // If LHS is an array, convert it to pointer.
       lhs = InsertArrayToPointerConversion(std::move(lhs));
       lhs_type = lhs->result_type_deref();
     }
 
-    lhs_type = GetPointeeType(lhs_type);
+    lhs_type = lhs_type.GetPointeeType();
   } else {
     // "member of object" operator, check that LHS is an object.
-    if (IsPointerType(lhs_type)) {
+    if (lhs_type.IsPointerType()) {
       BailOut(ErrorCode::kInvalidOperandType,
               llvm::formatv("member reference type {0} is a pointer; "
                             "did you mean to use '->'?",
@@ -4018,7 +3914,7 @@ ExprResult DILParser::BuildMemberOf(ExprResult lhs, std::string member_id,
   if (!member) {
     BailOut(ErrorCode::kInvalidOperandType,
             llvm::formatv("no member named '{0}' in {1}", member_id,
-                          TypeDescription(GetUnqualifiedType(lhs_type))),
+                          TypeDescription(lhs_type.GetFullyUnqualifiedType())),
             location);
     return std::make_unique<DILErrorNode>(bad_type);
   }
@@ -4107,7 +4003,7 @@ ExprResult DILParser::BuildIncrementDecrement(UnaryOpKind kind, ExprResult rhs,
             location);
     return std::make_unique<DILErrorNode>(bad_type);
   }
-  if (!IsScalar(rhs_type) && !IsPointerType(rhs_type)) {
+  if (!rhs_type.IsScalarType() && !rhs_type.IsPointerType()) {
     BailOut(ErrorCode::kInvalidOperandType,
             llvm::formatv("cannot {0} value of type '{1}'", op_name,
                           rhs_type.GetTypeName()),
@@ -4132,7 +4028,7 @@ CompilerType DILParser::PrepareBinaryAddition(ExprResult& lhs, ExprResult& rhs,
   auto result_type =
       UsualArithmeticConversions(m_ctx_scope, lhs, rhs, is_comp_assign);
 
-  if (IsScalar(result_type)) {
+  if (result_type.IsScalarType()) {
     return result_type;
   }
 
@@ -4142,10 +4038,10 @@ CompilerType DILParser::PrepareBinaryAddition(ExprResult& lhs, ExprResult& rhs,
   // Check for pointer arithmetic operation.
   CompilerType ptr_type, integer_type;
 
-  if (IsPointerType(lhs_type)) {
+  if (lhs_type.IsPointerType()) {
     ptr_type = lhs_type;
     integer_type = rhs_type;
-  } else if (IsPointerType(rhs_type)) {
+  } else if (rhs_type.IsPointerType()) {
     integer_type = lhs_type;
     ptr_type = rhs_type;
   }
@@ -4177,14 +4073,14 @@ CompilerType DILParser::PrepareBinarySubtraction(ExprResult& lhs,
   auto result_type =
       UsualArithmeticConversions(m_ctx_scope, lhs, rhs, is_comp_assign);
 
-  if (IsScalar(result_type)) {
+  if (result_type.IsScalarType()) {
     return result_type;
   }
 
   auto lhs_type = lhs->result_type_deref();
   auto rhs_type = rhs->result_type_deref();
 
-  if (IsPointerType(lhs_type) && IsInteger(rhs_type)) {
+  if (lhs_type.IsPointerType() && IsInteger(rhs_type)) {
     if (IsPointerToVoid(lhs_type)) {
       BailOut(ErrorCode::kInvalidOperandType, "arithmetic on a pointer to void",
               location);
@@ -4194,7 +4090,7 @@ CompilerType DILParser::PrepareBinarySubtraction(ExprResult& lhs,
     return lhs_type;
   }
 
-  if (IsPointerType(lhs_type) && IsPointerType(rhs_type)) {
+  if (lhs_type.IsPointerType() && rhs_type.IsPointerType()) {
     if (IsPointerToVoid(lhs_type) && IsPointerToVoid(rhs_type)) {
       BailOut(ErrorCode::kInvalidOperandType, "arithmetic on pointers to void",
               location);
@@ -4236,8 +4132,8 @@ CompilerType DILParser::PrepareBinaryMulDiv(ExprResult& lhs, ExprResult& rhs,
   auto result_type =
       UsualArithmeticConversions(m_ctx_scope, lhs, rhs, is_comp_assign);
 
-  // TODO(werat): Check for arithmetic zero division.
-  if (IsScalar(result_type)) {
+  // TODO: Check for arithmetic zero division.
+  if (result_type.IsScalarType()) {
     return result_type;
   }
 
@@ -4255,7 +4151,7 @@ CompilerType DILParser::PrepareBinaryRemainder(ExprResult& lhs, ExprResult& rhs,
   auto result_type =
       UsualArithmeticConversions(m_ctx_scope, lhs, rhs, is_comp_assign);
 
-  // TODO(werat): Check for arithmetic zero division.
+  // TODO: Check for arithmetic zero division.
   if (IsInteger(result_type)) {
     return result_type;
   }
@@ -4349,7 +4245,7 @@ CompilerType DILParser::PrepareBinaryComparison(BinaryOpKind kind,
   }
 
   // Scoped enums can be compared only to the instances of the same type.
-  if (IsScopedEnum(lhs_type) || IsScopedEnum(rhs_type)) {
+  if (lhs_type.IsScopedEnumerationType() || rhs_type.IsScopedEnumerationType()) {
     if (CompareTypes(lhs_type, rhs_type)) {
       return boolean_ty;
     }
@@ -4369,16 +4265,16 @@ CompilerType DILParser::PrepareBinaryComparison(BinaryOpKind kind,
   // any integer, not just literal zero, e.g. "nullptr == 1 -> false". C++
   // doesn't allow it, but we implement this for convenience.
   auto comparable_to_pointer = [&](CompilerType t) {
-    return IsPointerType(t) || IsInteger(t) || IsUnscopedEnum(t) ||
+    return t.IsPointerType() || IsInteger(t) || IsUnscopedEnum(t) ||
            (!is_ordered && IsNullPtrType(t));
   };
 
-  if ((IsPointerType(lhs_type) && comparable_to_pointer(rhs_type)) ||
-      (comparable_to_pointer(lhs_type) && IsPointerType(rhs_type))) {
+  if ((lhs_type.IsPointerType() && comparable_to_pointer(rhs_type)) ||
+      (comparable_to_pointer(lhs_type) && rhs_type.IsPointerType())) {
     // If both are pointers, check if they have comparable types. Comparing
     // pointers to void is always allowed.
-    if ((IsPointerType(lhs_type) && !IsPointerToVoid(lhs_type)) &&
-        (IsPointerType(rhs_type) && !IsPointerToVoid(rhs_type))) {
+    if ((lhs_type.IsPointerType() && !IsPointerToVoid(lhs_type)) &&
+        (rhs_type.IsPointerType() && !IsPointerToVoid(rhs_type))) {
       // Compare canonical unqualified pointer types.
       CompilerType lhs_unqualified_type =
           lhs_type.GetCanonicalType().GetFullyUnqualifiedType();
@@ -4547,19 +4443,19 @@ bool DILParser::ImplicitConversionIsAllowed(CompilerType src, CompilerType dst,
   if (IsInteger(dst) || IsFloat(dst)) {
     // Arithmetic types and enumerations can be implicitly converted to integers
     // and floating point types.
-    if (IsScalarOrUnscopedEnum(src) || IsScopedEnum(src)) {
+    if (IsScalarOrUnscopedEnum(src) || src.IsScopedEnumerationType()) {
       return true;
     }
   }
 
-  if (IsPointerType(dst)) {
+  if (dst.IsPointerType()) {
     // Literal zero, `nullptr_t` and arrays can be implicitly converted to
     // pointers.
     if (is_src_literal_zero || IsNullPtrType(src)) {
       return true;
     }
-    if (IsArrayType(src) &&
-        CompareTypes(src.GetArrayElementType(nullptr), GetPointeeType(dst))) {
+    if (src.IsArrayType() &&
+        CompareTypes(src.GetArrayElementType(nullptr), dst.GetPointeeType())) {
       return true;
     }
   }
@@ -4584,12 +4480,12 @@ ExprResult DILParser::InsertImplicitConversion(ExprResult expr,
           expr->location(), type, std::move(expr), CStyleCastKind::kArithmetic);
     }
 
-    if (IsPointerType(type)) {
+    if (type.IsPointerType()) {
       return std::make_unique<CStyleCastNode>(
           expr->location(), type, std::move(expr), CStyleCastKind::kPointer);
     }
 
-    // TODO(werat): What about if the conversion is not `kArithmetic` or
+    // TODO: What about if the conversion is not `kArithmetic` or
     // `kPointer`?
     llvm_unreachable("invalid implicit cast kind");
   }
@@ -4654,7 +4550,5 @@ lldb::BasicType TypeDeclaration::GetBasicType() const {
 
   return lldb::eBasicTypeInvalid;
 }
-
-
 
 }  // namespace lldb_private

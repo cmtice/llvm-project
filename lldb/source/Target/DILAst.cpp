@@ -199,114 +199,10 @@ bool IsContextVar(const std::string& name) {
   return context_args.find(name) != context_args.end();
 }
 
-
-static uint32_t GetNumberOfNonEmptyBaseClasses(CompilerType type) {
-  // Go through the base classes and count non-empty ones.
-  uint32_t ret = 0;
-  uint32_t num_direct_bases = type.GetNumDirectBaseClasses();
-
-  for (uint32_t i = 0; i < num_direct_bases; ++i) {
-    uint32_t bit_offset;
-    CompilerType base_type = type.GetDirectBaseClassAtIndex(i, &bit_offset);
-    if (base_type.GetNumFields() > 0 ||
-        GetNumberOfNonEmptyBaseClasses(base_type) > 0) {
-      ret += 1;
-    }
-  }
-  return ret;
-}
-
-static DILMemberInfo GetFieldWithNameIndexPath(CompilerType type,
-                                               ConstString name,
-                                               std::vector<uint32_t>* idx,
-                                               CompilerType empty_type) {
-  // Go through the fields first.
-  uint32_t num_fields = type.GetNumFields();
-  for (uint32_t i = 0; i < num_fields; ++i) {
-    uint64_t bit_offset=0;
-    uint32_t bitfield_bit_size = 0;
-    bool is_bitfield = false;
-    std::string name_sstr;
-    CompilerType field_type = type.GetFieldAtIndex(i, name_sstr, &bit_offset,
-                                                   &bitfield_bit_size,
-                                                   &is_bitfield);
-    ConstString name = field_type.GetTypeName();
-    DILMemberInfo field = {name, field_type, is_bitfield, bitfield_bit_size };
-    // Name can be null if this is a padding field.
-    if (field.name == name) {
-      if (idx) {
-        assert(idx->empty());
-        // Direct base classes are located before fields, so field members
-        // needs to be offset by the number of base classes.
-        idx->push_back(i + GetNumberOfNonEmptyBaseClasses(type));
-      }
-      return field;
-    } else if (field.type.IsAnonymousType()) {
-      // Every member of an anonymous struct is considered to be a member of
-      // the enclosing struct or union. This applies recursively if the
-      // enclosing struct or union is also anonymous.
-      //
-      //  struct S {
-      //    struct {
-      //      int x;
-      //    };
-      //  } s;
-      //
-      //  s.x = 1;
-
-      assert(!field.name && "Field should be unnamed.");
-
-      auto field_in_anon_type =
-          GetFieldWithNameIndexPath(field.type, name, idx, empty_type);
-      if (field_in_anon_type) {
-        if (idx) {
-          idx->push_back(i + GetNumberOfNonEmptyBaseClasses(type));
-        }
-        return field_in_anon_type;
-      }
-    }
-  }
-
-  // LLDB can't access inherited fields of anonymous struct members.
-  if (type.IsAnonymousType()) {
-    return {{}, empty_type, false, 0};
-  }
-
-  // Go through the base classes and look for the field there.
-  uint32_t num_non_empty_bases = 0;
-  uint32_t num_direct_bases = type.GetNumDirectBaseClasses();
-  for (uint32_t i = 0; i < num_direct_bases; ++i) {
-    uint32_t bit_offset = 0;
-    auto base = type.GetDirectBaseClassAtIndex(i, &bit_offset);
-    auto field = GetFieldWithNameIndexPath(base, name, idx, empty_type);
-    if (field) {
-      if (idx) {
-        idx->push_back(num_non_empty_bases);
-      }
-      return field;
-    }
-    if (base.GetNumFields() > 0) {
-      num_non_empty_bases += 1;
-    }
-  }
-
-  return {{}, empty_type, false, 0};
-}
-
-
-static std::tuple<DILMemberInfo, std::vector<uint32_t>>
-    GetMemberInfo(CompilerType type, const std::string& name) {
-  std::vector<uint32_t> idx;
-  CompilerType empty_type;
-  auto member = GetFieldWithNameIndexPath(type, ConstString(name), &idx, empty_type);
-  std::reverse(idx.begin(), idx.end());
-  return std::make_tuple(member, std::move(idx));
-}
-
-
-static lldb::ValueObjectSP LookupStaticIdentifier(lldb::TargetSP target_sp,
-                                                  const llvm::StringRef& name_ref,
-                                                  ConstString unqualified_name)
+static lldb::ValueObjectSP LookupStaticIdentifier(
+    lldb::TargetSP target_sp,
+    const llvm::StringRef& name_ref,
+    ConstString unqualified_name)
 {
   // List global variable with the same "basename". There can be many matches
   // from other scopes (namespaces, classes), so we do additional filtering
@@ -380,7 +276,7 @@ CompilerType ResolveTypeByName(
     const std::string& name,
     std::shared_ptr<ExecutionContextScope> ctx_scope)
 {
-  // TODO(b/163308825): Do scope-aware type lookup. Look for the types defined
+  // TODO: Do scope-aware type lookup. Look for the types defined
   // in the current scope (function, class, namespace) and prioritize them.
 
   // Internally types don't have global scope qualifier in their names and
@@ -451,7 +347,7 @@ CompilerType ResolveTypeByName(
       return full_match;
     }
   } else {
-    // TODO(b/163308825): We're looking for type, but there may be multiple
+    // TODO: We're looking for type, but there may be multiple
     // candidates and which one is correct depends on the currect scope. For now
     // just pick the most "probable" type.
 
@@ -550,7 +446,10 @@ std::unique_ptr<IdentifierInfo> LookupIdentifier(
         return IdentifierInfo::FromThisKeyword(scope_ptr->GetPointerType());
       }
       // Lookup the variable as a member of the current scope value.
-      auto [member, path] = GetMemberInfo(*scope_ptr, name_ref.data());
+      lldb::ValueObjectSP empty_sp;
+      bool use_synthetic = false;
+      auto [member, path] = GetMemberInfo(empty_sp, *scope_ptr,
+                                          name_ref.data(), use_synthetic);
       if (member) {
         return IdentifierInfo::FromMemberPath(member.type, std::move(path));
       }

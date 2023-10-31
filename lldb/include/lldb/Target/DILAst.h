@@ -27,21 +27,42 @@
 
 namespace lldb_private {
 
+// Helper types & functions
+
 struct DILMemberInfo {
-  std::optional<ConstString> name;
+  std::optional<std::string> name;
   CompilerType type;
   bool is_bitfield;
   uint32_t bitfield_size_in_bits;
+  bool is_synthetic;
 
   explicit operator bool() const { return type.IsValid(); }
 };
+
+uint32_t GetNumberOfNonEmptyBaseClasses(CompilerType type);
+
+DILMemberInfo GetFieldWithNameIndexPath(lldb::ValueObjectSP lhs_val_sp,
+                                        CompilerType type,
+                                        const std::string& name,
+                                        std::vector<uint32_t>* idx,
+                                        CompilerType empty_type,
+                                        bool use_synthetic);
+
+std::tuple<DILMemberInfo, std::vector<uint32_t>> GetMemberInfo (
+    lldb::ValueObjectSP lhs_val_sp,
+    CompilerType type,
+    const std::string& name,
+    bool use_synthetic);
+
+
+
 
 lldb::ValueObjectSP DILGetSPWithLock(
     lldb::ValueObjectSP valobj_sp,
     lldb::DynamicValueType use_dynamic = lldb::eNoDynamicValues,
     bool use_synthetic = false);
 
-class DILVisitor;
+// Enums for various DIL AST Nodes.
 
 enum class DILNodeKind{
   kDILErrorNode,
@@ -60,81 +81,99 @@ enum class DILNodeKind{
   kSmartPtrToPtrDecay
 };
 
-// TODO: Save original token and the source position, so we can give
-// better diagnostic messages during the evaluation.
-class DILAstNode {
- public:
-  DILAstNode(clang::SourceLocation location) : location_(location) {}
-  virtual ~DILAstNode() {}
-
-  virtual void Accept(DILVisitor* v) const = 0;
-
-  virtual bool is_error() const { return false; };
-  virtual bool is_rvalue() const = 0;
-  virtual bool is_bitfield() const { return false; };
-  virtual bool is_context_var() const { return false; };
-  virtual bool is_literal_zero() const { return false; }
-  virtual uint32_t bitfield_size() const { return 0; }
-  virtual CompilerType result_type() const = 0;
-
-  virtual DILNodeKind what_am_i() const = 0;
-
-  clang::SourceLocation location() const { return location_; }
-
-  // The expression result type, but dereferenced in case it's a reference. This
-  // is for convenience, since for the purposes of the semantic analysis only
-  // the dereferenced type matters.
-  CompilerType result_type_deref() const;
-
- private:
-  clang::SourceLocation location_;
+enum class CStyleCastKind {
+  kArithmetic,
+  kEnumeration,
+  kPointer,
+  kNullptr,
+  kReference,
 };
 
-using ExprResult = std::unique_ptr<DILAstNode>;
-
-class DILErrorNode : public DILAstNode {
- public:
-  DILErrorNode(CompilerType empty_type)
-      : DILAstNode(clang::SourceLocation()), m_empty_type(empty_type) {}
-  void Accept(DILVisitor* v) const override;
-  bool is_error() const override { return true; }
-  bool is_rvalue() const override { return false; }
-  CompilerType result_type() const override { return m_empty_type; }
-  CompilerType result_type_real() const { return m_empty_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kDILErrorNode; }
-
- private:
-  CompilerType m_empty_type;
+enum class CxxStaticCastKind {
+  kNoOp,
+  kArithmetic,
+  kEnumeration,
+  kPointer,
+  kNullptr,
+  kBaseToDerived,
+  kDerivedToBase,
 };
 
-class LiteralNode : public DILAstNode {
- public:
-  template <typename ValueT>
-  LiteralNode(clang::SourceLocation location, CompilerType type, ValueT&& value,
-              bool is_literal_zero)
-      : DILAstNode(location),
-        m_type(type),
-        m_value(std::forward<ValueT>(value)),
-        m_is_literal_zero(is_literal_zero) {}
-
-  void Accept(DILVisitor* v) const override;
-  bool is_rvalue() const override { return true; }
-  bool is_literal_zero() const override { return m_is_literal_zero; }
-  CompilerType result_type() const override { return m_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kLiteralNode; }
-
-  template <typename ValueT>
-  ValueT value() const {
-    return std::get<ValueT>(m_value);
-  }
-
-  auto value() const { return m_value; }
-
- private:
-  CompilerType m_type;
-  std::variant<llvm::APInt, llvm::APFloat, bool, std::vector<char>> m_value;
-  bool m_is_literal_zero;
+enum class BinaryOpKind {
+  Mul,        // "*"
+  Div,        // "/"
+  Rem,        // "%"
+  Add,        // "+"
+  Sub,        // "-"
+  Shl,        // "<<"
+  Shr,        // ">>"
+  LT,         // "<"
+  GT,         // ">"
+  LE,         // "<="
+  GE,         // ">="
+  EQ,         // "=="
+  NE,         // "!="
+  And,        // "&"
+  Xor,        // "^"
+  Or,         // "|"
+  LAnd,       // "&&"
+  LOr,        // "||"
+  Assign,     // "="
+  MulAssign,  // "*="
+  DivAssign,  // "/="
+  RemAssign,  // "%="
+  AddAssign,  // "+="
+  SubAssign,  // "-="
+  ShlAssign,  // "<<="
+  ShrAssign,  // ">>="
+  AndAssign,  // "&="
+  XorAssign,  // "^="
+  OrAssign,   // "|="
 };
+
+enum class UnaryOpKind {
+  PostInc,  // "++"
+  PostDec,  // "--"
+  PreInc,   // "++"
+  PreDec,   // "--"
+  AddrOf,   // "&"
+  Deref,    // "*"
+  Plus,     // "+"
+  Minus,    // "-"
+  Not,      // "~"
+  LNot,     // "!"
+};
+
+// Helper functions for DIL AST node parsing.
+
+std::string to_string(BinaryOpKind kind);
+
+BinaryOpKind clang_token_kind_to_binary_op_kind(
+    clang::tok::TokenKind token_kind);
+
+bool binary_op_kind_is_comp_assign(BinaryOpKind kind);
+
+std::string to_string(UnaryOpKind kind);
+CompilerType ResolveTypeByName(
+    const std::string& name,
+    std::shared_ptr<ExecutionContextScope> ctx_scope);
+
+bool IsContextVar(const std::string& name);
+
+// Type helper functions
+
+bool CompareTypes(CompilerType lhs, CompilerType rhs);
+bool IsSmartPtrType(CompilerType type);
+bool IsInteger(CompilerType type);
+bool IsFloat(CompilerType type);
+bool IsEnum(CompilerType type);
+bool IsUnscopedEnum(CompilerType type);
+bool IsIntegerOrUnscopedEnum(CompilerType type);
+bool IsNullPtrType(CompilerType type);
+bool IsBool(CompilerType type);
+bool IsSigned(CompilerType type);
+
+// Class used to store & manipulate information about identifiers.
 
 class IdentifierInfo {
  private:
@@ -197,38 +236,92 @@ class IdentifierInfo {
   MemberPath m_path;
 };
 
-bool IsContextVar(const std::string& name);
 
 std::unique_ptr<IdentifierInfo> LookupIdentifier(
     const std::string& name,
     std::shared_ptr<ExecutionContextScope> ctx_scope,
     CompilerType *scope_ptr = nullptr);
 
-CompilerType ResolveTypeByName(
-    const std::string& name,
-    std::shared_ptr<ExecutionContextScope> ctx_scope);
+// Forward declaration, for use in DIL AST nodes.
 
-bool CompareTypes(CompilerType lhs, CompilerType rhs);
+class DILVisitor;
 
-bool IsInteger(CompilerType type);
-bool IsFloat(CompilerType type);
-bool IsEnum(CompilerType type);
-bool IsIntegerOrUnscopedEnum(CompilerType type);
-bool IsPointerType(CompilerType type);
-bool IsNullPtrType(CompilerType type);
-bool IsScalar(CompilerType type);
-bool IsBool(CompilerType type);
-bool IsSigned(CompilerType type);
-bool IsArrayType(CompilerType type);
-bool IsReferenceType(CompilerType type);
-bool IsSmartPtrType(CompilerType type);
-bool IsScopedEnum(CompilerType type);
-bool IsUnscopedEnum(CompilerType type);
+class DILAstNode {
+ public:
+  DILAstNode(clang::SourceLocation location) : location_(location) {}
+  virtual ~DILAstNode() {}
+
+  virtual void Accept(DILVisitor* v) const = 0;
+
+  virtual bool is_error() const { return false; };
+  virtual bool is_rvalue() const = 0;
+  virtual bool is_bitfield() const { return false; };
+  virtual bool is_context_var() const { return false; };
+  virtual bool is_literal_zero() const { return false; }
+  virtual uint32_t bitfield_size() const { return 0; }
+  virtual CompilerType result_type() const = 0;
+
+  virtual DILNodeKind what_am_i() const = 0;
+
+  clang::SourceLocation location() const { return location_; }
+
+  // The expression result type, but dereferenced in case it's a reference. This
+  // is for convenience, since for the purposes of the semantic analysis only
+  // the dereferenced type matters.
+  CompilerType result_type_deref() const;
+
+ private:
+  clang::SourceLocation location_;
+};
 
 
+using ExprResult = std::unique_ptr<DILAstNode>;
 
 
+class DILErrorNode : public DILAstNode {
+ public:
+  DILErrorNode(CompilerType empty_type)
+      : DILAstNode(clang::SourceLocation()), m_empty_type(empty_type) {}
+  void Accept(DILVisitor* v) const override;
+  bool is_error() const override { return true; }
+  bool is_rvalue() const override { return false; }
+  CompilerType result_type() const override { return m_empty_type; }
+  CompilerType result_type_real() const { return m_empty_type; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kDILErrorNode; }
 
+ private:
+  CompilerType m_empty_type;
+};
+
+
+class LiteralNode : public DILAstNode {
+ public:
+  template <typename ValueT>
+  LiteralNode(clang::SourceLocation location, CompilerType type, ValueT&& value,
+              bool is_literal_zero)
+      : DILAstNode(location),
+        m_type(type),
+        m_value(std::forward<ValueT>(value)),
+        m_is_literal_zero(is_literal_zero) {}
+
+  void Accept(DILVisitor* v) const override;
+  bool is_rvalue() const override { return true; }
+  bool is_literal_zero() const override { return m_is_literal_zero; }
+  CompilerType result_type() const override { return m_type; }
+  DILNodeKind what_am_i() const override { return DILNodeKind::kLiteralNode; }
+
+  template <typename ValueT>
+  ValueT value() const {
+    return std::get<ValueT>(m_value);
+  }
+
+  auto value() const { return m_value; }
+
+ private:
+  CompilerType m_type;
+  std::variant<llvm::APInt, llvm::APFloat, bool, std::vector<char>> m_value;
+  bool m_is_literal_zero;
+};
 
 
 class IdentifierNode : public DILAstNode {
@@ -246,7 +339,9 @@ class IdentifierNode : public DILAstNode {
   bool is_rvalue() const override { return m_is_rvalue; }
   bool is_context_var() const override { return m_is_context_var; };
   CompilerType result_type() const override { return m_identifier->GetType(); }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kIdentifierNode; }
+  DILNodeKind what_am_i() const override {
+    return DILNodeKind::kIdentifierNode;
+  }
 
   std::string name() const { return m_name; }
   const IdentifierInfo& info() const { return *m_identifier; }
@@ -257,6 +352,7 @@ class IdentifierNode : public DILAstNode {
   std::string m_name;
   std::unique_ptr<IdentifierInfo> m_identifier;
 };
+
 
 class SizeOfNode : public DILAstNode {
  public:
@@ -278,6 +374,7 @@ class SizeOfNode : public DILAstNode {
   CompilerType m_operand;
 };
 
+
 class BuiltinFunctionCallNode : public DILAstNode {
  public:
   BuiltinFunctionCallNode(clang::SourceLocation location,
@@ -291,7 +388,9 @@ class BuiltinFunctionCallNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return true; }
   CompilerType result_type() const override { return m_result_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kBuiltinFunctionCallNode; }
+  DILNodeKind what_am_i() const override {
+    return DILNodeKind::kBuiltinFunctionCallNode;
+  }
 
   std::string name() const { return m_name; }
   const std::vector<ExprResult>& arguments() const { return m_arguments; };
@@ -302,13 +401,6 @@ class BuiltinFunctionCallNode : public DILAstNode {
   std::vector<ExprResult> m_arguments;
 };
 
-enum class CStyleCastKind {
-  kArithmetic,
-  kEnumeration,
-  kPointer,
-  kNullptr,
-  kReference,
-};
 
 class CStyleCastNode : public DILAstNode {
  public:
@@ -324,7 +416,9 @@ class CStyleCastNode : public DILAstNode {
     return m_kind != CStyleCastKind::kReference;
   }
   CompilerType result_type() const override { return m_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kCStyleCastNode; }
+  DILNodeKind what_am_i() const override {
+    return DILNodeKind::kCStyleCastNode;
+  }
 
   CompilerType type() const { return m_type; }
   DILAstNode* rhs() const { return m_rhs.get(); }
@@ -336,15 +430,6 @@ class CStyleCastNode : public DILAstNode {
   CStyleCastKind m_kind;
 };
 
-enum class CxxStaticCastKind {
-  kNoOp,
-  kArithmetic,
-  kEnumeration,
-  kPointer,
-  kNullptr,
-  kBaseToDerived,
-  kDerivedToBase,
-};
 
 class CxxStaticCastNode : public DILAstNode {
  public:
@@ -381,7 +466,9 @@ class CxxStaticCastNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return m_is_rvalue; }
   CompilerType result_type() const override { return m_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kCxxStaticCastNode; }
+  DILNodeKind what_am_i() const override {
+    return DILNodeKind::kCxxStaticCastNode;
+  }
 
   CompilerType type() const { return m_type; }
   DILAstNode* rhs() const { return m_rhs.get(); }
@@ -398,6 +485,7 @@ class CxxStaticCastNode : public DILAstNode {
   bool m_is_rvalue;
 };
 
+
 class CxxReinterpretCastNode : public DILAstNode {
  public:
   CxxReinterpretCastNode(clang::SourceLocation location, CompilerType type,
@@ -410,7 +498,9 @@ class CxxReinterpretCastNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return m_is_rvalue; }
   CompilerType result_type() const override { return m_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kCxxReinterpretCastNode; }
+  DILNodeKind what_am_i() const override {
+    return DILNodeKind::kCxxReinterpretCastNode;
+  }
 
   CompilerType type() const { return m_type; }
   DILAstNode* rhs() const { return m_rhs.get(); }
@@ -420,6 +510,7 @@ class CxxReinterpretCastNode : public DILAstNode {
   ExprResult m_rhs;
   bool m_is_rvalue;
 };
+
 
 class MemberOfNode : public DILAstNode {
  public:
@@ -461,6 +552,7 @@ class MemberOfNode : public DILAstNode {
   ConstString m_field_name;
 };
 
+
 class ArraySubscriptNode : public DILAstNode {
  public:
   ArraySubscriptNode(clang::SourceLocation location, CompilerType result_type,
@@ -473,7 +565,9 @@ class ArraySubscriptNode : public DILAstNode {
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return false; }
   CompilerType result_type() const override { return m_result_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kArraySubscriptNode; }
+  DILNodeKind what_am_i() const override {
+    return DILNodeKind::kArraySubscriptNode;
+  }
 
   DILAstNode* base() const { return m_base.get(); }
   DILAstNode* index() const { return m_index.get(); }
@@ -484,42 +578,6 @@ class ArraySubscriptNode : public DILAstNode {
   ExprResult m_index;
 };
 
-enum class BinaryOpKind {
-  Mul,        // "*"
-  Div,        // "/"
-  Rem,        // "%"
-  Add,        // "+"
-  Sub,        // "-"
-  Shl,        // "<<"
-  Shr,        // ">>"
-  LT,         // "<"
-  GT,         // ">"
-  LE,         // "<="
-  GE,         // ">="
-  EQ,         // "=="
-  NE,         // "!="
-  And,        // "&"
-  Xor,        // "^"
-  Or,         // "|"
-  LAnd,       // "&&"
-  LOr,        // "||"
-  Assign,     // "="
-  MulAssign,  // "*="
-  DivAssign,  // "/="
-  RemAssign,  // "%="
-  AddAssign,  // "+="
-  SubAssign,  // "-="
-  ShlAssign,  // "<<="
-  ShrAssign,  // ">>="
-  AndAssign,  // "&="
-  XorAssign,  // "^="
-  OrAssign,   // "|="
-};
-
-std::string to_string(BinaryOpKind kind);
-BinaryOpKind clang_token_kind_to_binary_op_kind(
-    clang::tok::TokenKind token_kind);
-bool binary_op_kind_is_comp_assign(BinaryOpKind kind);
 
 class BinaryOpNode : public DILAstNode {
  public:
@@ -553,20 +611,6 @@ class BinaryOpNode : public DILAstNode {
   CompilerType m_comp_assign_type;
 };
 
-enum class UnaryOpKind {
-  PostInc,  // "++"
-  PostDec,  // "--"
-  PreInc,   // "++"
-  PreDec,   // "--"
-  AddrOf,   // "&"
-  Deref,    // "*"
-  Plus,     // "+"
-  Minus,    // "-"
-  Not,      // "~"
-  LNot,     // "!"
-};
-
-std::string to_string(UnaryOpKind kind);
 
 class UnaryOpNode : public DILAstNode {
  public:
@@ -590,6 +634,7 @@ class UnaryOpNode : public DILAstNode {
   UnaryOpKind m_kind;
   ExprResult m_rhs;
 };
+
 
 class TernaryOpNode : public DILAstNode {
  public:
@@ -622,16 +667,21 @@ class TernaryOpNode : public DILAstNode {
   ExprResult m_rhs;
 };
 
+
 class SmartPtrToPtrDecay : public DILAstNode {
  public:
   SmartPtrToPtrDecay(clang::SourceLocation location, CompilerType result_type,
                      ExprResult ptr)
-      : DILAstNode(location), m_result_type(result_type), m_ptr(std::move(ptr)) {}
+      : DILAstNode(location),
+        m_result_type(result_type),
+        m_ptr(std::move(ptr)) { }
 
   void Accept(DILVisitor* v) const override;
   bool is_rvalue() const override { return false; }
   CompilerType result_type() const override { return m_result_type; }
-  DILNodeKind what_am_i() const override { return DILNodeKind::kSmartPtrToPtrDecay; }
+  DILNodeKind what_am_i() const override {
+    return DILNodeKind::kSmartPtrToPtrDecay;
+  }
 
   DILAstNode* ptr() const { return m_ptr.get(); }
 
@@ -639,6 +689,7 @@ class SmartPtrToPtrDecay : public DILAstNode {
   CompilerType m_result_type;
   ExprResult m_ptr;
 };
+
 
 class DILVisitor {
  public:

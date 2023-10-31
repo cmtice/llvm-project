@@ -551,7 +551,8 @@ protected:
     ValueObjectSP valobj_sp;
     // Temporary variable, used to control whether to use DIL parser/evaluator
     // or not for 'frame variable' command. .
-    bool use_DIL = m_option_variable.use_dil;
+    // bool use_DIL = m_option_variable.use_dil;
+    bool use_DIL = true;
 
     TypeSummaryImplSP summary_format_sp;
     if (!m_option_variable.summary.IsCurrentValueEmpty())
