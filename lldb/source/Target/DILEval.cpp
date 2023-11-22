@@ -951,25 +951,6 @@ void DILInterpreter::Visit(const IdentifierNode* node) {
   target_sp = val->GetTargetSP();
   assert(target_sp && target_sp->IsValid() &&
          "identifier doesn't resolve to a valid value");
-  // TODO: Check that `val` type is matching the node's result type.
-
-  // If value is a reference, dereference it to get to the underlying type. All
-  // operations on a reference should be actually operations on the referent.
-  if (val->GetCompilerType().IsReferenceType()) {
-    // TODO: LLDB canonizes the type upon a dereference. This looks like
-    // a bug, but for now we need to mitigate it. Check if the resulting type is
-    // incorrect and fix it up.
-    // Not necessary if https://reviews.llvm.org/D103532 is available.
-    auto deref_type = val->GetCompilerType().GetNonReferenceType();
-    Status error;
-    lldb::ValueObjectSP val_sp(DILGetSPWithLock(val));
-    val = val_sp->Dereference(error);
-
-    CompilerType val_type = val->GetCompilerType();
-    if (val_type != deref_type) {
-      val = lldb::ValueObjectSP(val->Cast(deref_type));
-    }
-  }
 
   m_result = val;
 }
@@ -1091,6 +1072,11 @@ void DILInterpreter::Visit(const CStyleCastNode* node) {
     return;
   }
 
+  if (rhs->GetCompilerType().IsReferenceType()) {
+    Status error;
+    rhs = rhs->Dereference(error);
+  }
+
   switch (node->kind()) {
     case CStyleCastKind::kArithmetic: {
       assert((type.GetCanonicalType().GetBasicTypeEnumeration() !=
@@ -1160,6 +1146,11 @@ void DILInterpreter::Visit(const CxxStaticCastNode* node) {
   auto rhs = DILEvalNode(node->rhs());
   if (!rhs) {
     return;
+  }
+
+  if (rhs->GetCompilerType().IsReferenceType()) {
+    Status error;
+    rhs = rhs->Dereference(error);
   }
 
   switch (node->kind()) {
@@ -1237,6 +1228,11 @@ void DILInterpreter::Visit(const CxxReinterpretCastNode* node) {
     return;
   }
 
+  if (rhs->GetCompilerType().IsReferenceType()) {
+    Status error;
+    rhs = rhs->Dereference(error);
+  }
+
   if (IsInteger(type)) {
     if (rhs->GetCompilerType().IsPointerType()
         || IsNullPtrType(rhs->GetCompilerType())) {
@@ -1285,11 +1281,14 @@ void DILInterpreter::Visit(const MemberOfNode* node) {
   // This requires calculating the offset of "foo" and generally possible only
   // for members from non-virtual bases.
 
+  Status error;
   lldb::ValueObjectSP lhs = DILEvalNode(node->lhs());
   if (!lhs) {
     return;
   }
 
+  if (lhs->GetCompilerType().IsReferenceType())
+    lhs = lhs->Dereference(error);
   m_result = EvaluateMemberOf(lhs, node->member_index(), node->is_synthetic());
 }
 
@@ -1302,6 +1301,14 @@ void DILInterpreter::Visit(const ArraySubscriptNode* node) {
   if (!index) {
     return;
   }
+
+  // Check to see if either the base or the index are references; if they
+  // are, dereference them.
+  Status error;
+  if (base->GetCompilerType().IsReferenceType())
+    base = base->Dereference(error);
+  if (index->GetCompilerType().IsReferenceType())
+    index = index->Dereference(error);
 
   // Check to see if 'base' has a synthetic value; if so, try using that.
   if (base->HasSyntheticValue()) {
@@ -1348,10 +1355,13 @@ void DILInterpreter::Visit(const ArraySubscriptNode* node) {
 void DILInterpreter::Visit(const BinaryOpNode* node) {
   // Short-circuit logical operators.
   if (node->kind() == BinaryOpKind::LAnd || node->kind() == BinaryOpKind::LOr) {
+    Status error;
     auto lhs = DILEvalNode(node->lhs());
     if (!lhs) {
       return;
     }
+    if (lhs->GetCompilerType().IsReferenceType())
+      lhs = lhs->Dereference(error);
     assert(IsContextuallyConvertibleToBool(lhs->GetCompilerType()) &&
            "invalid ast: must be convertible to bool");
 
@@ -1370,6 +1380,8 @@ void DILInterpreter::Visit(const BinaryOpNode* node) {
     if (!rhs) {
       return;
     }
+    if (rhs->GetCompilerType().IsReferenceType())
+      rhs = rhs->Dereference(error);
     assert(IsContextuallyConvertibleToBool(rhs->GetCompilerType()) &&
            "invalid ast: must be convertible to bool");
 
@@ -1385,6 +1397,19 @@ void DILInterpreter::Visit(const BinaryOpNode* node) {
   auto rhs = DILEvalNode(node->rhs());
   if (!rhs) {
     return;
+  }
+
+  // For math operations, be sure to dereference the operands.
+  if ((node->kind() == BinaryOpKind::Add)
+      || (node->kind() == BinaryOpKind::Sub)
+      || (node->kind() == BinaryOpKind::Mul)
+      || (node->kind() == BinaryOpKind::Div)
+      || (node->kind() == BinaryOpKind::Rem)) {
+    Status error;
+    if (lhs->GetCompilerType().IsReferenceType())
+      lhs = lhs->Dereference(error);
+    if (rhs->GetCompilerType().IsReferenceType())
+      rhs = rhs->Dereference(error);
   }
 
   switch (node->kind()) {
@@ -1469,10 +1494,14 @@ void DILInterpreter::Visit(const UnaryOpNode* node) {
   FlowAnalysis rhs_flow(
       /* address_of_is_pending */ node->kind() == UnaryOpKind::AddrOf);
 
+  Status error;
   auto rhs = DILEvalNode(node->rhs(), &rhs_flow);
   if (!rhs) {
     return;
   }
+
+  if (rhs->GetCompilerType().IsReferenceType())
+    rhs = rhs->Dereference(error);
 
   switch (node->kind()) {
     case UnaryOpKind::Deref:
@@ -1577,6 +1606,11 @@ void DILInterpreter::Visit(const SmartPtrToPtrDecay* node) {
   lldb::addr_t base_addr = ptr_value->GetValueAsUnsigned(0);
   CompilerType pointer_type = ptr_value->GetCompilerType();
 
+  if (value_sp->GetCompilerType().IsTemplateType()
+      && value_sp->GetCompilerType().GetNumTemplateArguments() == 1)
+    pointer_type =
+        value_sp->GetCompilerType().GetTypeTemplateArgument(0).GetPointerType();
+
   m_result = CreateValueFromPointer(m_target, base_addr, pointer_type);
 }
 
@@ -1613,6 +1647,11 @@ lldb::ValueObjectSP DILInterpreter::EvaluateComparison(BinaryOpKind kind,
 
 lldb::ValueObjectSP DILInterpreter::EvaluateDereference(lldb::ValueObjectSP rhs)
 {
+  // If rhs is a reference, dereference it first.
+  Status error;
+  if (rhs->GetCompilerType().IsReferenceType())
+    rhs = rhs->Dereference(error);
+
   assert(rhs->GetCompilerType().IsPointerType()
          && "invalid ast: must be a pointer type");
 
@@ -1630,7 +1669,6 @@ lldb::ValueObjectSP DILInterpreter::EvaluateDereference(lldb::ValueObjectSP rhs)
     return value_sp;
   }
 
-  Status error;
   return value_sp->Dereference(error);
 }
 

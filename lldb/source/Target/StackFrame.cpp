@@ -540,9 +540,11 @@ ValueObjectSP StackFrame::DILEvaluateVariableExpression(
     return ValueObjectSP();
   }
 
-  var_sp = ret_val->GetVariable();
-  if (!var_sp && ret_val->GetParent()) {
-    var_sp = ret_val->GetParent()->GetVariable();
+  if (ret_val) {
+    var_sp = ret_val->GetVariable();
+    if (!var_sp && ret_val->GetParent()) {
+      var_sp = ret_val->GetParent()->GetVariable();
+    }
   }
   return ret_val;
 }
