@@ -6,11 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "lldb/Core/DILAst.h"
 #include "lldb/Core/ValueObjectRegister.h"
 #include "lldb/Core/ValueObjectVariable.h"
 #include "lldb/Symbol/TypeList.h"
 #include "lldb/Symbol/VariableList.h"
-#include "lldb/Target/DILAst.h"
 #include "lldb/Target/LanguageRuntime.h"
 #include "lldb/Target/RegisterContext.h"
 #include "llvm/ADT/StringRef.h"

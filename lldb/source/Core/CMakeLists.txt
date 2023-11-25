@@ -31,6 +31,9 @@ add_lldb_library(lldbCore
   DebuggerEvents.cpp
   Declaration.cpp
   Disassembler.cpp
+  DILAst.cpp
+  DILEval.cpp
+  DILParser.cpp
   DumpDataExtractor.cpp
   DumpRegisterValue.cpp
   DumpRegisterInfo.cpp

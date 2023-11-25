@@ -58,20 +58,22 @@ class TestFrameVarDILPointerDereference(TestBase):
 
         # Tests
 
-        self.expect("frame variable --dil '*p_int0'", substrs=["0"])
-        self.expect("frame variable --dil '*p_int0 + 1'", substrs=["1"])
-        self.expect("frame variable --dil '*cp_int5'", substrs=["5"])
-        self.expect("frame variable --dil '*cp_int5 - 1'", substrs=["4"])
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable '*p_int0'", substrs=["0"])
+        self.expect("frame variable '*p_int0 + 1'", substrs=["1"])
+        self.expect("frame variable '*cp_int5'", substrs=["5"])
+        self.expect("frame variable '*cp_int5 - 1'", substrs=["4"])
 
-        self.expect("frame variable --dil '&p_void[0]'", error=True,
+        self.expect("frame variable '&p_void[0]'", error=True,
                     substrs=["subscript of pointer to incomplete type 'void'"])
-        self.expect("frame variable --dil '&*p_void'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '&pp_void0[2]'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&*p_void'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&pp_void0[2]'", patterns=["0x[0-9]+"])
 
-        self.expect("frame variable --dil '**pp_int0'", substrs=["0"])
-        self.expect("frame variable --dil '**pp_int0 + 1'", substrs=["1"])
-        self.expect("frame variable --dil '&**pp_int0'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '&**pp_int0 + 1'",
+        self.expect("frame variable '**pp_int0'", substrs=["0"])
+        self.expect("frame variable '**pp_int0 + 1'", substrs=["1"])
+        self.expect("frame variable '&**pp_int0'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&**pp_int0 + 1'",
                     patterns=["0x[0-9]+"])
 
         Is32Bit = False
@@ -79,34 +81,34 @@ class TestFrameVarDILPointerDereference(TestBase):
           Is32Bit = True;
 
         if Is32Bit:
-          self.expect("frame variable --dil '&*p_null'",
+          self.expect("frame variable '&*p_null'",
                       substrs=["0x00000000"])
-          self.expect("frame variable --dil '&p_null[4]'",
+          self.expect("frame variable '&p_null[4]'",
                       substrs=["0x00000010"])
-          self.expect("frame variable --dil '&*(int*)0'",
+          self.expect("frame variable '&*(int*)0'",
                       substrs=["0x00000000"])
-          self.expect("frame variable --dil '&((int*)0)[1]'",
+          self.expect("frame variable '&((int*)0)[1]'",
                       substrs=["0x00000004"])
-          self.expect("frame variable --dil '&(true ? *p_null : *p_null)'",
+          self.expect("frame variable '&(true ? *p_null : *p_null)'",
                       substrs=["0x00000000"])
 
-          self.expect("frame variable --dil '&(false ? *p_null : *p_null)'",
+          self.expect("frame variable '&(false ? *p_null : *p_null)'",
                       substrs=["0x00000000"])
-          self.expect("frame variable --dil '&*(true ? p_null : nullptr)'",
+          self.expect("frame variable '&*(true ? p_null : nullptr)'",
                       substrs=["0x00000000"])
         else:
-          self.expect("frame variable --dil '&*p_null'",
+          self.expect("frame variable '&*p_null'",
                       substrs=["0x0000000000000000"])
-          self.expect("frame variable --dil '&p_null[4]'",
+          self.expect("frame variable '&p_null[4]'",
                       substrs=["0x0000000000000010"])
-          self.expect("frame variable --dil '&*(int*)0'",
+          self.expect("frame variable '&*(int*)0'",
                       substrs=["0x0000000000000000"])
-          self.expect("frame variable --dil '&((int*)0)[1]'",
+          self.expect("frame variable '&((int*)0)[1]'",
                       substrs=["0x0000000000000004"])
-          self.expect("frame variable --dil '&(true ? *p_null : *p_null)'",
+          self.expect("frame variable '&(true ? *p_null : *p_null)'",
                       substrs=["0x0000000000000000"])
 
-          self.expect("frame variable --dil '&(false ? *p_null : *p_null)'",
+          self.expect("frame variable '&(false ? *p_null : *p_null)'",
                       substrs=["0x0000000000000000"])
-          self.expect("frame variable --dil '&*(true ? p_null : nullptr)'",
+          self.expect("frame variable '&*(true ? p_null : nullptr)'",
                       substrs=["0x0000000000000000"])

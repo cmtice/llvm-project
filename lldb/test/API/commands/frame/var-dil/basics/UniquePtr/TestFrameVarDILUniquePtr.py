@@ -56,15 +56,17 @@ class TestFrameVarDILUniquePtr(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil '*(NodeU**)&ptr_node.__ptr_'",
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable '*(NodeU**)&ptr_node.__ptr_'",
                     patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '(*(NodeU**)&ptr_node.__ptr_)->value'",
+        self.expect("frame variable '(*(NodeU**)&ptr_node.__ptr_)->value'",
                     substrs=["1"])
 
-        self.expect("frame variable --dil 'ptr_node.__ptr_.__value_'",
+        self.expect("frame variable 'ptr_node.__ptr_.__value_'",
                     patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil 'ptr_node.__ptr_.__value_->value'",
+        self.expect("frame variable 'ptr_node.__ptr_.__value_->value'",
                     substrs=["1"])
         self.expect(
-            "frame variable --dil 'ptr_node.__ptr_.__value_->next.__ptr_.__value_->value'",
+            "frame variable 'ptr_node.__ptr_.__value_->next.__ptr_.__value_->value'",
             substrs=["2"])

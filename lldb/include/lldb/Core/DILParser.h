@@ -23,7 +23,7 @@
 #include "clang/Lex/LiteralSupport.h"
 #include "clang/Lex/ModuleLoader.h"
 #include "clang/Lex/Preprocessor.h"
-#include "lldb/Target/DILAst.h"
+#include "lldb/Core/DILAst.h"
 #include "lldb/Target/ExecutionContextScope.h"
 #include "lldb/Utility/Status.h"
 
@@ -152,7 +152,7 @@ class DILParser {
                      std::shared_ptr<ExecutionContextScope> exe_ctx_scope,
                      bool use_synthetic);
 
-  ExprResult Run(Status& error);
+  ParseResult Run(Status& error);
 
   ~DILParser() { m_ctx_scope.reset(); }
 
@@ -161,22 +161,22 @@ class DILParser {
   using PtrOperator = std::tuple<clang::tok::TokenKind, clang::SourceLocation>;
 
  private:
-  ExprResult ParseExpression();
-  ExprResult ParseAssignmentExpression();
-  ExprResult ParseLogicalOrExpression();
-  ExprResult ParseLogicalAndExpression();
-  ExprResult ParseInclusiveOrExpression();
-  ExprResult ParseExclusiveOrExpression();
-  ExprResult ParseAndExpression();
-  ExprResult ParseEqualityExpression();
-  ExprResult ParseRelationalExpression();
-  ExprResult ParseShiftExpression();
-  ExprResult ParseAdditiveExpression();
-  ExprResult ParseMultiplicativeExpression();
-  ExprResult ParseCastExpression();
-  ExprResult ParseUnaryExpression();
-  ExprResult ParsePostfixExpression();
-  ExprResult ParsePrimaryExpression();
+  ParseResult ParseExpression();
+  ParseResult ParseAssignmentExpression();
+  ParseResult ParseLogicalOrExpression();
+  ParseResult ParseLogicalAndExpression();
+  ParseResult ParseInclusiveOrExpression();
+  ParseResult ParseExclusiveOrExpression();
+  ParseResult ParseAndExpression();
+  ParseResult ParseEqualityExpression();
+  ParseResult ParseRelationalExpression();
+  ParseResult ParseShiftExpression();
+  ParseResult ParseAdditiveExpression();
+  ParseResult ParseMultiplicativeExpression();
+  ParseResult ParseCastExpression();
+  ParseResult ParseUnaryExpression();
+  ParseResult ParsePostfixExpression();
+  ParseResult ParsePrimaryExpression();
 
   std::optional<CompilerType> ParseTypeId(bool must_be_type_id = false);
   void ParseTypeSpecifierSeq(TypeDeclaration* type_decl);
@@ -199,22 +199,22 @@ class DILParser {
 
   std::string ParseIdExpression();
   std::string ParseUnqualifiedId();
-  ExprResult ParseNumericLiteral();
-  ExprResult ParseBooleanLiteral();
-  ExprResult ParseCharLiteral();
-  ExprResult ParseStringLiteral();
-  ExprResult ParsePointerLiteral();
-  ExprResult ParseNumericConstant(clang::Token token);
-  ExprResult ParseFloatingLiteral(clang::NumericLiteralParser& literal,
+  ParseResult ParseNumericLiteral();
+  ParseResult ParseBooleanLiteral();
+  ParseResult ParseCharLiteral();
+  ParseResult ParseStringLiteral();
+  ParseResult ParsePointerLiteral();
+  ParseResult ParseNumericConstant(clang::Token token);
+  ParseResult ParseFloatingLiteral(clang::NumericLiteralParser& literal,
                                   clang::Token token);
-  ExprResult ParseIntegerLiteral(clang::NumericLiteralParser& literal,
+  ParseResult ParseIntegerLiteral(clang::NumericLiteralParser& literal,
                                  clang::Token token);
-  ExprResult ParseBuiltinFunction(clang::SourceLocation loc,
+  ParseResult ParseBuiltinFunction(clang::SourceLocation loc,
                                   std::unique_ptr<BuiltinFunctionDef> func_def);
 
   bool ImplicitConversionIsAllowed(CompilerType src, CompilerType dst,
                                    bool is_src_literal_zero = false);
-  ExprResult InsertImplicitConversion(ExprResult expr, CompilerType type);
+  ParseResult InsertImplicitConversion(ParseResult expr, CompilerType type);
 
   void ConsumeToken();
 
@@ -231,62 +231,63 @@ class DILParser {
   template <typename... Ts>
   void ExpectOneOf(clang::tok::TokenKind k, Ts... ks);
 
-  ExprResult BuildCStyleCast(CompilerType type, ExprResult rhs,
+  ParseResult BuildCStyleCast(CompilerType type, ParseResult rhs,
                              clang::SourceLocation location);
-  ExprResult BuildCxxCast(clang::tok::TokenKind kind, CompilerType type,
-                          ExprResult rhs, clang::SourceLocation location);
-  ExprResult BuildCxxDynamicCast(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxCast(clang::tok::TokenKind kind, CompilerType type,
+                          ParseResult rhs, clang::SourceLocation location);
+  ParseResult BuildCxxDynamicCast(CompilerType type, ParseResult rhs,
                                  clang::SourceLocation location);
-  ExprResult BuildCxxStaticCast(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxStaticCast(CompilerType type, ParseResult rhs,
                                 clang::SourceLocation location);
-  ExprResult BuildCxxStaticCastToScalar(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxStaticCastToScalar(CompilerType type, ParseResult rhs,
                                         clang::SourceLocation location);
-  ExprResult BuildCxxStaticCastToEnum(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxStaticCastToEnum(CompilerType type, ParseResult rhs,
                                       clang::SourceLocation location);
-  ExprResult BuildCxxStaticCastToPointer(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxStaticCastToPointer(CompilerType type, ParseResult rhs,
                                          clang::SourceLocation location);
-  ExprResult BuildCxxStaticCastToNullPtr(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxStaticCastToNullPtr(CompilerType type, ParseResult rhs,
                                          clang::SourceLocation location);
-  ExprResult BuildCxxStaticCastToReference(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxStaticCastToReference(CompilerType type, ParseResult rhs,
                                            clang::SourceLocation location);
-  ExprResult BuildCxxStaticCastForInheritedTypes(
-      CompilerType type, ExprResult rhs, clang::SourceLocation location);
-  ExprResult BuildCxxReinterpretCast(CompilerType type, ExprResult rhs,
+  ParseResult BuildCxxStaticCastForInheritedTypes(
+      CompilerType type, ParseResult rhs, clang::SourceLocation location);
+  ParseResult BuildCxxReinterpretCast(CompilerType type, ParseResult rhs,
                                      clang::SourceLocation location);
-  ExprResult BuildUnaryOp(UnaryOpKind kind, ExprResult rhs,
+  ParseResult BuildUnaryOp(UnaryOpKind kind, ParseResult rhs,
                           clang::SourceLocation location);
-  ExprResult BuildIncrementDecrement(UnaryOpKind kind, ExprResult rhs,
+  ParseResult BuildIncrementDecrement(UnaryOpKind kind, ParseResult rhs,
                                      clang::SourceLocation location);
-  ExprResult BuildBinaryOp(BinaryOpKind kind, ExprResult lhs, ExprResult rhs,
+  ParseResult BuildBinaryOp(BinaryOpKind kind, ParseResult lhs, ParseResult rhs,
                            clang::SourceLocation location);
-  CompilerType PrepareBinaryAddition(ExprResult& lhs, ExprResult& rhs,
+  CompilerType PrepareBinaryAddition(ParseResult& lhs, ParseResult& rhs,
                                      clang::SourceLocation location,
                                      bool is_comp_assign);
-  CompilerType PrepareBinarySubtraction(ExprResult& lhs, ExprResult& rhs,
+  CompilerType PrepareBinarySubtraction(ParseResult& lhs, ParseResult& rhs,
                                         clang::SourceLocation location,
                                         bool is_comp_assign);
-  CompilerType PrepareBinaryMulDiv(ExprResult& lhs, ExprResult& rhs,
+  CompilerType PrepareBinaryMulDiv(ParseResult& lhs, ParseResult& rhs,
                                    bool is_comp_assign);
-  CompilerType PrepareBinaryRemainder(ExprResult& lhs, ExprResult& rhs,
+  CompilerType PrepareBinaryRemainder(ParseResult& lhs, ParseResult& rhs,
                                       bool is_comp_assign);
-  CompilerType PrepareBinaryBitwise(ExprResult& lhs, ExprResult& rhs,
+  CompilerType PrepareBinaryBitwise(ParseResult& lhs, ParseResult& rhs,
                                     bool is_comp_assign);
-  CompilerType PrepareBinaryShift(ExprResult& lhs, ExprResult& rhs,
+  CompilerType PrepareBinaryShift(ParseResult& lhs, ParseResult& rhs,
                                   bool is_comp_assign);
-  CompilerType PrepareBinaryComparison(BinaryOpKind kind, ExprResult& lhs,
-                                 ExprResult& rhs,
+  CompilerType PrepareBinaryComparison(BinaryOpKind kind, ParseResult& lhs,
+                                 ParseResult& rhs,
                                  clang::SourceLocation location);
-  CompilerType PrepareBinaryLogical(const ExprResult& lhs,
-                                    const ExprResult& rhs);
-  ExprResult BuildBinarySubscript(ExprResult lhs, ExprResult rhs,
+  CompilerType PrepareBinaryLogical(const ParseResult& lhs,
+                                    const ParseResult& rhs);
+  ParseResult BuildBinarySubscript(ParseResult lhs, ParseResult rhs,
                                   clang::SourceLocation location);
   CompilerType PrepareCompositeAssignment(CompilerType comp_assign_type,
-                                          const ExprResult& lhs,
+                                          const ParseResult& lhs,
                                           clang::SourceLocation location);
-  ExprResult BuildTernaryOp(ExprResult cond, ExprResult lhs, ExprResult rhs,
+  ParseResult BuildTernaryOp(ParseResult cond, ParseResult lhs, ParseResult rhs,
                             clang::SourceLocation location);
-  ExprResult BuildMemberOf(ExprResult lhs, std::string member_id, bool is_arrow,
-                           clang::SourceLocation location);
+  ParseResult BuildMemberOf(ParseResult lhs, std::string member_id,
+                            bool is_arrow,
+                            clang::SourceLocation location);
 
   bool AllowSideEffects() const { return m_allow_side_effects; }
 

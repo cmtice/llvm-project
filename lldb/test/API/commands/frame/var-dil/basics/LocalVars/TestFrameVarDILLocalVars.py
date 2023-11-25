@@ -57,13 +57,15 @@ class TestFrameVarDILLocalVars(TestBase):
         interp = self.dbg.GetCommandInterpreter()
 
         # Test 'a' is 1
-        self.expect("frame variable --dil a", substrs=["1"])
-        self.expect("frame variable --dil b", substrs=["2"])
-        self.expect("frame variable --dil c", substrs=["\\xfd"])
-        self.expect("frame variable --dil '(int)c'", substrs=["-3"])
-        self.expect("frame variable --dil s", substrs=["4"])
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable a", substrs=["1"])
+        self.expect("frame variable b", substrs=["2"])
+        self.expect("frame variable c", substrs=["\\xfd"])
+        self.expect("frame variable '(int)c'", substrs=["-3"])
+        self.expect("frame variable s", substrs=["4"])
 
-        self.expect("frame variable --dil 'a + b'", substrs=["3"])
-        self.expect("frame variable --dil 'c + 1'", substrs=["-2"])
-        self.expect("frame variable --dil 's + 1'", substrs=["5"])
-        self.expect("frame variable --dil 'c + s'", substrs=["1"])
+        self.expect("frame variable 'a + b'", substrs=["3"])
+        self.expect("frame variable 'c + 1'", substrs=["-2"])
+        self.expect("frame variable 's + 1'", substrs=["5"])
+        self.expect("frame variable 'c + s'", substrs=["1"])

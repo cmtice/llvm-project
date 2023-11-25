@@ -56,72 +56,74 @@ class TestFrameVarDILSubscript(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
 
         # const char*
-        self.expect("frame variable --dil 'char_ptr[0]'", substrs=["'l'"])
-        self.expect("frame variable --dil '1[char_ptr]'", substrs=["'o'"])
+        self.expect("frame variable 'char_ptr[0]'", substrs=["'l'"])
+        self.expect("frame variable '1[char_ptr]'", substrs=["'o'"])
 
         # const char[]
-        self.expect("frame variable --dil 'char_arr[0]'", substrs=["'i'"])
-        self.expect("frame variable --dil '1[char_arr]'", substrs=["'p'"])
+        self.expect("frame variable 'char_arr[0]'", substrs=["'i'"])
+        self.expect("frame variable '1[char_arr]'", substrs=["'p'"])
 
         # Boolean types are integral too!
-        self.expect("frame variable --dil 'int_arr[false]'", substrs=["1"])
-        self.expect("frame variable --dil 'true[int_arr]'", substrs=["2"])
+        self.expect("frame variable 'int_arr[false]'", substrs=["1"])
+        self.expect("frame variable 'true[int_arr]'", substrs=["2"])
 
         # As well as unscoped enums.
-        self.expect("frame variable --dil 'int_arr[enum_one]'", substrs=["2"])
-        self.expect("frame variable --dil 'enum_one[int_arr]'", substrs=["2"])
+        self.expect("frame variable 'int_arr[enum_one]'", substrs=["2"])
+        self.expect("frame variable 'enum_one[int_arr]'", substrs=["2"])
 
         # But floats are not.
-        self.expect("frame variable --dil 'int_arr[1.0]'", error=True,
+        self.expect("frame variable 'int_arr[1.0]'", error=True,
                     substrs=["array subscript is not an integer"])
 
         # Base should be a "pointer to T" and index should be of an integral
         # type.
-        self.expect("frame variable --dil 'char_arr[char_ptr]'", error=True,
+        self.expect("frame variable 'char_arr[char_ptr]'", error=True,
                     substrs=["array subscript is not an integer"])
-        self.expect("frame variable --dil '1[2]'", error=True,
+        self.expect("frame variable '1[2]'", error=True,
                     substrs=["subscripted value is not an array or pointer"])
 
         # Test when base and index are references.
-        self.expect("frame variable --dil 'c_arr[0].field_'", substrs=["0"])
-        self.expect("frame variable --dil 'c_arr[idx_1_ref].field_'",
+        self.expect("frame variable 'c_arr[0].field_'", substrs=["0"])
+        self.expect("frame variable 'c_arr[idx_1_ref].field_'",
                     substrs=["1"])
-        self.expect("frame variable --dil 'c_arr[enum_ref].field_'",
+        self.expect("frame variable 'c_arr[enum_ref].field_'",
                     substrs=["1"])
-        self.expect("frame variable --dil 'c_arr_ref[0].field_'",
+        self.expect("frame variable 'c_arr_ref[0].field_'",
                     substrs=["0"])
-        self.expect("frame variable --dil 'c_arr_ref[idx_1_ref].field_'",
+        self.expect("frame variable 'c_arr_ref[idx_1_ref].field_'",
                     substrs=["1"])
-        self.expect("frame variable --dil 'c_arr_ref[enum_ref].field_'",
+        self.expect("frame variable 'c_arr_ref[enum_ref].field_'",
                     substrs=["1"])
 
-        self.expect("frame variable --dil 'td_int_arr[0]'", substrs=["1"])
-        self.expect("frame variable --dil 'td_int_arr[td_int_idx_1]'",
+        self.expect("frame variable 'td_int_arr[0]'", substrs=["1"])
+        self.expect("frame variable 'td_int_arr[td_int_idx_1]'",
                     substrs=["2"])
-        self.expect("frame variable --dil 'td_int_arr[td_td_int_idx_2]'",
+        self.expect("frame variable 'td_int_arr[td_td_int_idx_2]'",
                     substrs=["3"])
-        self.expect("frame variable --dil 'td_int_ptr[0]'", substrs=["1"])
-        self.expect("frame variable --dil 'td_int_ptr[td_int_idx_1]'",
+        self.expect("frame variable 'td_int_ptr[0]'", substrs=["1"])
+        self.expect("frame variable 'td_int_ptr[td_int_idx_1]'",
                     substrs=["2"])
-        self.expect("frame variable --dil 'td_int_ptr[td_td_int_idx_2]'",
+        self.expect("frame variable 'td_int_ptr[td_td_int_idx_2]'",
                     substrs=["3"])
         # Both typedefs and refs!
-        self.expect("frame variable --dil 'td_int_arr_ref[td_int_idx_1_ref]'",
+        self.expect("frame variable 'td_int_arr_ref[td_int_idx_1_ref]'",
                     substrs=["2"])
 
         # Test for index out of bounds.
-        self.expect("frame variable --dil 'int_arr[42]'", patterns=["[0-9]+"])
-        self.expect("frame variable --dil 'int_arr[100]'", patterns=["[0-9]+"])
+        self.expect("frame variable 'int_arr[42]'", patterns=["[0-9]+"])
+        self.expect("frame variable 'int_arr[100]'", patterns=["[0-9]+"])
 
         # Test for negative index.
-        self.expect("frame variable --dil 'int_arr[-1]'", patterns=["[0-9]+"])
-        self.expect("frame variable --dil 'int_arr[-42]'", patterns=["[0-9]+"])
+        self.expect("frame variable 'int_arr[-1]'", patterns=["[0-9]+"])
+        self.expect("frame variable 'int_arr[-42]'", patterns=["[0-9]+"])
 
         # Test for "max unsigned char".
-        self.expect("frame variable --dil 'uint8_arr[uchar_idx]'",
+        self.expect("frame variable 'uint8_arr[uchar_idx]'",
                     substrs=["'\\xab'"])
 
         # Test address-of of the subscripted value.
-        self.expect("frame variable --dil '(&c_arr[1])->field_'", substrs=["1"])
+        self.expect("frame variable '(&c_arr[1])->field_'", substrs=["1"])

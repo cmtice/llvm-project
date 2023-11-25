@@ -42,9 +42,6 @@ static constexpr OptionDefinition g_variable_options[] = {
     {LLDB_OPT_SET_1 | LLDB_OPT_SET_2, false, "scope", 's',
      OptionParser::eNoArgument, nullptr, {}, 0, eArgTypeNone,
      "Show variable scope (argument, local, global, static)."},
-    {LLDB_OPT_SET_1 | LLDB_OPT_SET_2, false, "dil", 'e',
-     OptionParser::eNoArgument, nullptr, {}, 0, eArgTypeNone,
-     "Use the DIL parser & evaluator to evaluate the variable expression."},
     {LLDB_OPT_SET_1, false, "summary", 'y', OptionParser::eRequiredArgument,
      nullptr, {}, 0, eArgTypeName,
      "Specify the summary that the variable output should use."},
@@ -72,7 +69,7 @@ static Status ValidateSummaryString(const char *str, void *) {
 OptionGroupVariable::OptionGroupVariable(bool show_frame_options)
     : include_frame_options(show_frame_options), show_args(false),
       show_recognized_args(false), show_locals(false), show_globals(false),
-      use_regex(false), show_scope(false), show_decl(false), use_dil(false),
+      use_regex(false), show_scope(false), show_decl(false),
       summary(ValidateNamedSummary), summary_string(ValidateSummaryString) {}
 
 Status
@@ -105,9 +102,6 @@ OptionGroupVariable::SetOptionValue(uint32_t option_idx,
   case 't':
     show_recognized_args = false;
     break;
-  case 'e':
-    use_dil = true;
-    break;
   case 'y':
     error = summary.SetCurrentValue(option_arg);
     break;
@@ -130,7 +124,6 @@ void OptionGroupVariable::OptionParsingStarting(
   show_decl = false;
   use_regex = false;
   show_scope = false;
-  use_dil = false;
   summary.Clear();
   summary_string.Clear();
 }

@@ -275,7 +275,7 @@ class DILAstNode {
 };
 
 
-using ExprResult = std::unique_ptr<DILAstNode>;
+using ParseResult = std::unique_ptr<DILAstNode>;
 
 
 class DILErrorNode : public DILAstNode {
@@ -379,7 +379,7 @@ class BuiltinFunctionCallNode : public DILAstNode {
  public:
   BuiltinFunctionCallNode(clang::SourceLocation location,
                           CompilerType result_type, std::string name,
-                          std::vector<ExprResult> arguments)
+                          std::vector<ParseResult> arguments)
       : DILAstNode(location),
         m_result_type(result_type),
         m_name(std::move(name)),
@@ -393,19 +393,19 @@ class BuiltinFunctionCallNode : public DILAstNode {
   }
 
   std::string name() const { return m_name; }
-  const std::vector<ExprResult>& arguments() const { return m_arguments; };
+  const std::vector<ParseResult>& arguments() const { return m_arguments; };
 
  private:
   CompilerType m_result_type;
   std::string m_name;
-  std::vector<ExprResult> m_arguments;
+  std::vector<ParseResult> m_arguments;
 };
 
 
 class CStyleCastNode : public DILAstNode {
  public:
   CStyleCastNode(clang::SourceLocation location, CompilerType type,
-                 ExprResult rhs, CStyleCastKind kind)
+                 ParseResult rhs, CStyleCastKind kind)
       : DILAstNode(location),
         m_type(type),
         m_rhs(std::move(rhs)),
@@ -426,7 +426,7 @@ class CStyleCastNode : public DILAstNode {
 
  private:
   CompilerType m_type;
-  ExprResult m_rhs;
+  ParseResult m_rhs;
   CStyleCastKind m_kind;
 };
 
@@ -434,7 +434,7 @@ class CStyleCastNode : public DILAstNode {
 class CxxStaticCastNode : public DILAstNode {
  public:
   CxxStaticCastNode(clang::SourceLocation location, CompilerType type,
-                    ExprResult rhs, CxxStaticCastKind kind, bool is_rvalue)
+                    ParseResult rhs, CxxStaticCastKind kind, bool is_rvalue)
       : DILAstNode(location),
         m_type(type),
         m_rhs(std::move(rhs)),
@@ -446,7 +446,7 @@ class CxxStaticCastNode : public DILAstNode {
   }
 
   CxxStaticCastNode(clang::SourceLocation location, CompilerType type,
-                    ExprResult rhs, std::vector<uint32_t> idx, bool is_rvalue)
+                    ParseResult rhs, std::vector<uint32_t> idx, bool is_rvalue)
       : DILAstNode(location),
         m_type(type),
         m_rhs(std::move(rhs)),
@@ -455,7 +455,7 @@ class CxxStaticCastNode : public DILAstNode {
         m_is_rvalue(is_rvalue) {}
 
   CxxStaticCastNode(clang::SourceLocation location, CompilerType type,
-                    ExprResult rhs, uint64_t offset, bool is_rvalue)
+                    ParseResult rhs, uint64_t offset, bool is_rvalue)
       : DILAstNode(location),
         m_type(type),
         m_rhs(std::move(rhs)),
@@ -478,7 +478,7 @@ class CxxStaticCastNode : public DILAstNode {
 
  private:
   CompilerType m_type;
-  ExprResult m_rhs;
+  ParseResult m_rhs;
   std::vector<uint32_t> m_idx;
   uint64_t m_offset = 0;
   CxxStaticCastKind m_kind;
@@ -489,7 +489,7 @@ class CxxStaticCastNode : public DILAstNode {
 class CxxReinterpretCastNode : public DILAstNode {
  public:
   CxxReinterpretCastNode(clang::SourceLocation location, CompilerType type,
-                         ExprResult rhs, bool is_rvalue)
+                         ParseResult rhs, bool is_rvalue)
       : DILAstNode(location),
         m_type(type),
         m_rhs(std::move(rhs)),
@@ -507,7 +507,7 @@ class CxxReinterpretCastNode : public DILAstNode {
 
  private:
   CompilerType m_type;
-  ExprResult m_rhs;
+  ParseResult m_rhs;
   bool m_is_rvalue;
 };
 
@@ -515,7 +515,7 @@ class CxxReinterpretCastNode : public DILAstNode {
 class MemberOfNode : public DILAstNode {
  public:
   MemberOfNode(clang::SourceLocation location, CompilerType result_type,
-               ExprResult lhs, bool is_bitfield, uint32_t bitfield_size,
+               ParseResult lhs, bool is_bitfield, uint32_t bitfield_size,
                std::vector<uint32_t> member_index, bool is_arrow,
                bool is_synthetic, ConstString name)
       : DILAstNode(location),
@@ -543,7 +543,7 @@ class MemberOfNode : public DILAstNode {
 
  private:
   CompilerType m_result_type;
-  ExprResult m_lhs;
+  ParseResult m_lhs;
   bool m_is_bitfield;
   uint32_t m_bitfield_size;
   std::vector<uint32_t> m_member_index;
@@ -556,7 +556,7 @@ class MemberOfNode : public DILAstNode {
 class ArraySubscriptNode : public DILAstNode {
  public:
   ArraySubscriptNode(clang::SourceLocation location, CompilerType result_type,
-                     ExprResult base, ExprResult index)
+                     ParseResult base, ParseResult index)
       : DILAstNode(location),
         m_result_type(result_type),
         m_base(std::move(base)),
@@ -574,15 +574,15 @@ class ArraySubscriptNode : public DILAstNode {
 
  private:
   CompilerType m_result_type;
-  ExprResult m_base;
-  ExprResult m_index;
+  ParseResult m_base;
+  ParseResult m_index;
 };
 
 
 class BinaryOpNode : public DILAstNode {
  public:
   BinaryOpNode(clang::SourceLocation location, CompilerType result_type,
-               BinaryOpKind kind, ExprResult lhs, ExprResult rhs,
+               BinaryOpKind kind, ParseResult lhs, ParseResult rhs,
                CompilerType comp_assign_type)
       : DILAstNode(location),
         m_result_type(result_type),
@@ -606,8 +606,8 @@ class BinaryOpNode : public DILAstNode {
  private:
   CompilerType m_result_type;
   BinaryOpKind m_kind;
-  ExprResult m_lhs;
-  ExprResult m_rhs;
+  ParseResult m_lhs;
+  ParseResult m_rhs;
   CompilerType m_comp_assign_type;
 };
 
@@ -615,7 +615,7 @@ class BinaryOpNode : public DILAstNode {
 class UnaryOpNode : public DILAstNode {
  public:
   UnaryOpNode(clang::SourceLocation location, CompilerType result_type,
-              UnaryOpKind kind, ExprResult rhs)
+              UnaryOpKind kind, ParseResult rhs)
       : DILAstNode(location),
         m_result_type(result_type),
         m_kind(kind),
@@ -632,14 +632,14 @@ class UnaryOpNode : public DILAstNode {
  private:
   CompilerType m_result_type;
   UnaryOpKind m_kind;
-  ExprResult m_rhs;
+  ParseResult m_rhs;
 };
 
 
 class TernaryOpNode : public DILAstNode {
  public:
   TernaryOpNode(clang::SourceLocation location, CompilerType result_type,
-                ExprResult cond, ExprResult lhs, ExprResult rhs)
+                ParseResult cond, ParseResult lhs, ParseResult rhs)
       : DILAstNode(location),
         m_result_type(result_type),
         m_cond(std::move(cond)),
@@ -662,16 +662,16 @@ class TernaryOpNode : public DILAstNode {
 
  private:
   CompilerType m_result_type;
-  ExprResult m_cond;
-  ExprResult m_lhs;
-  ExprResult m_rhs;
+  ParseResult m_cond;
+  ParseResult m_lhs;
+  ParseResult m_rhs;
 };
 
 
 class SmartPtrToPtrDecay : public DILAstNode {
  public:
   SmartPtrToPtrDecay(clang::SourceLocation location, CompilerType result_type,
-                     ExprResult ptr)
+                     ParseResult ptr)
       : DILAstNode(location),
         m_result_type(result_type),
         m_ptr(std::move(ptr)) { }
@@ -687,7 +687,7 @@ class SmartPtrToPtrDecay : public DILAstNode {
 
  private:
   CompilerType m_result_type;
-  ExprResult m_ptr;
+  ParseResult m_ptr;
 };
 
 

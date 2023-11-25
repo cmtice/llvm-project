@@ -56,7 +56,9 @@ class TestFrameVarDILQualifiedId(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil '::ns::i'", substrs=["1"])
-        self.expect("frame variable --dil 'ns::i'", substrs=["1"])
-        self.expect("frame variable --dil '::ns::ns::i'", substrs=["2"])
-        self.expect("frame variable --dil 'ns::ns::i'", substrs=["2"])
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable '::ns::i'", substrs=["1"])
+        self.expect("frame variable 'ns::i'", substrs=["1"])
+        self.expect("frame variable '::ns::ns::i'", substrs=["2"])
+        self.expect("frame variable 'ns::ns::i'", substrs=["2"])

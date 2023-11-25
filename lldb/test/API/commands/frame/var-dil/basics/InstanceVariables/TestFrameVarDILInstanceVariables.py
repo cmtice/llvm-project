@@ -56,14 +56,16 @@ class TestFrameVarDILInstanceVariables(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil 'this->field_'", substrs=["1"])
-        self.expect("frame variable --dil 'this.field_'", error=True,
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable 'this->field_'", substrs=["1"])
+        self.expect("frame variable 'this.field_'", error=True,
                     substrs=["member reference type 'TestMethods *' is a pointer; did "
                              "you mean to use '->'?"])
 
-        self.expect("frame variable --dil 'c.field_'", substrs=["-1"])
-        self.expect("frame variable --dil 'c_ref.field_'", substrs=["-1"])
-        self.expect("frame variable --dil 'c_ptr->field_'", substrs=["-1"])
-        self.expect("frame variable --dil 'c->field_'", error=True,
+        self.expect("frame variable 'c.field_'", substrs=["-1"])
+        self.expect("frame variable 'c_ref.field_'", substrs=["-1"])
+        self.expect("frame variable 'c_ptr->field_'", substrs=["-1"])
+        self.expect("frame variable 'c->field_'", error=True,
                     substrs=["member reference type 'C' is not a "
                              "pointer; did you mean to use '.'?"])

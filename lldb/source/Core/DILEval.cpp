@@ -6,13 +6,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/Target/DILEval.h"
+#include "lldb/Core/DILEval.h"
 
 #include <memory>
 
 #include "clang/Basic/TokenKinds.h"
+#include "lldb/Core/DILAst.h"
 #include "lldb/Core/ValueObject.h"
-#include "lldb/Target/DILAst.h"
 #include "lldb/lldb-enumerations.h"
 #include "llvm/ADT/APSInt.h"
 #include "llvm/Support/FormatAdapters.h"

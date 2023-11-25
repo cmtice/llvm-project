@@ -56,57 +56,59 @@ class TestFrameVarDILAddressOf(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil '&x'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil 'r'", substrs=["42"])
-        self.expect("frame variable --dil '&r'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil 'pr'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '&pr'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil 'my_pr'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '&my_pr'", patterns=["0x[0-9]+"])
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable '&x'", patterns=["0x[0-9]+"])
+        self.expect("frame variable 'r'", substrs=["42"])
+        self.expect("frame variable '&r'", patterns=["0x[0-9]+"])
+        self.expect("frame variable 'pr'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&pr'", patterns=["0x[0-9]+"])
+        self.expect("frame variable 'my_pr'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&my_pr'", patterns=["0x[0-9]+"])
 
-        self.expect("frame variable --dil '&x == &r'", substrs=["true"])
-        self.expect("frame variable --dil '&x != &r'", substrs=["false"])
+        self.expect("frame variable '&x == &r'", substrs=["true"])
+        self.expect("frame variable '&x != &r'", substrs=["false"])
 
-        self.expect("frame variable --dil '&p == &pr'", substrs=["true"])
-        self.expect("frame variable --dil '&p != &pr'", substrs=["false"])
-        self.expect("frame variable --dil '&p == &my_pr'", substrs=["true"])
-        self.expect("frame variable --dil '&p != &my_pr'", substrs=["false"])
+        self.expect("frame variable '&p == &pr'", substrs=["true"])
+        self.expect("frame variable '&p != &pr'", substrs=["false"])
+        self.expect("frame variable '&p == &my_pr'", substrs=["true"])
+        self.expect("frame variable '&p != &my_pr'", substrs=["false"])
 
-        self.expect("frame variable --dil '&globalVar'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '&s_str'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '&param'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&globalVar'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&s_str'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '&param'", patterns=["0x[0-9]+"])
 
-        self.expect("frame variable --dil '&(true ? x : x)'",
+        self.expect("frame variable '&(true ? x : x)'",
                     patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '&(true ? c : c)'",
+        self.expect("frame variable '&(true ? c : c)'",
                     patterns=["0x[0-9]+"])
 
-        self.expect("frame variable --dil '&externGlobalVar'", error=True,
+        self.expect("frame variable '&externGlobalVar'", error=True,
                     substrs=["use of undeclared identifier 'externGlobalVar'"])
 
-        self.expect("frame variable --dil '&1'", error=True,
+        self.expect("frame variable '&1'", error=True,
                     substrs=["cannot take the address of an rvalue of type "
                              "'int'"])
 
-        self.expect("frame variable --dil '&0.1'", error=True,
+        self.expect("frame variable '&0.1'", error=True,
                     substrs=["cannot take the address of an rvalue of type "
                              "'double'"])
 
-        self.expect("frame variable --dil '&(true ? 1 : 1)'", error=True,
+        self.expect("frame variable '&(true ? 1 : 1)'", error=True,
                     substrs=["cannot take the address of an rvalue of type "
                              "'int'"])
 
-        self.expect("frame variable --dil '&(true ? c : (char)1)'", error=True,
+        self.expect("frame variable '&(true ? c : (char)1)'", error=True,
                     substrs=["cannot take the address of an rvalue of type "
                              "'char'"])
-        self.expect("frame variable --dil '&(true ? c : 1)'", error=True,
+        self.expect("frame variable '&(true ? c : 1)'", error=True,
                     substrs=["cannot take the address of an rvalue of type "
                              "'int'"])
 
-        self.expect("frame variable --dil '&this'", error=True,
+        self.expect("frame variable '&this'", error=True,
                     substrs=["cannot take the address of an rvalue of type "
                              "'TestMethods *'"])
 
-        self.expect("frame variable --dil '&(&s_str)'", error=True,
+        self.expect("frame variable '&(&s_str)'", error=True,
                     substrs=["cannot take the address of an rvalue of type "
                              "'const char **'"])

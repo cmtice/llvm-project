@@ -56,14 +56,16 @@ class TestFrameVarDILIndirection(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil '*p'", substrs=["1"])
-        self.expect("frame variable --dil 'p'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '*my_p'", substrs=["1"])
-        self.expect("frame variable --dil 'my_p'", patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '*my_pr'", substrs=["1"])
-        self.expect("frame variable --dil 'my_pr'", patterns=["0x[0-9]+"])
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable '*p'", substrs=["1"])
+        self.expect("frame variable 'p'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '*my_p'", substrs=["1"])
+        self.expect("frame variable 'my_p'", patterns=["0x[0-9]+"])
+        self.expect("frame variable '*my_pr'", substrs=["1"])
+        self.expect("frame variable 'my_pr'", patterns=["0x[0-9]+"])
 
-        self.expect("frame variable --dil '*1'", error=True,
+        self.expect("frame variable '*1'", error=True,
                     substrs=["indirection requires pointer operand ('int' invalid)"])
-        self.expect("frame variable --dil '*val'", error=True,
+        self.expect("frame variable '*val'", error=True,
                     substrs=["indirection requires pointer operand ('int' invalid)"])

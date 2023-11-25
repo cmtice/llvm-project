@@ -14,8 +14,8 @@
 
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TokenKinds.h"
-#include "lldb/Target/DILAst.h"
-#include "lldb/Target/DILParser.h"
+#include "lldb/Core/DILAst.h"
+#include "lldb/Core/DILParser.h"
 
 namespace lldb_private {
 

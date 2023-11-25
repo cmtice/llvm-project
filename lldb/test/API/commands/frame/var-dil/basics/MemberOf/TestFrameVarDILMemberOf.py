@@ -56,38 +56,40 @@ class TestFrameVarDILMemberOf(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil 's.x'", substrs=["1"])
-        self.expect("frame variable --dil 's.r'", substrs=["2"])
-        self.expect("frame variable --dil 's.r + 1'", substrs=["3"])
-        self.expect("frame variable --dil 'sr.x'", substrs=["1"])
-        self.expect("frame variable --dil 'sr.r'", substrs=["2"])
-        self.expect("frame variable --dil 'sr.r + 1'", substrs=["3"])
-        self.expect("frame variable --dil 'sp->x'", substrs=["1"])
-        self.expect("frame variable --dil 'sp->r'", substrs=["2"])
-        self.expect("frame variable --dil 'sp->r + 1'", substrs=["3"])
-        self.expect("frame variable --dil 'sarr->x'", substrs=["5"]);
-        self.expect("frame variable --dil 'sarr->r'", substrs=["2"])
-        self.expect("frame variable --dil 'sarr->r + 1'", substrs=["3"])
-        self.expect("frame variable --dil '(sarr + 1)->x'", substrs=["1"])
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable 's.x'", substrs=["1"])
+        self.expect("frame variable 's.r'", substrs=["2"])
+        self.expect("frame variable 's.r + 1'", substrs=["3"])
+        self.expect("frame variable 'sr.x'", substrs=["1"])
+        self.expect("frame variable 'sr.r'", substrs=["2"])
+        self.expect("frame variable 'sr.r + 1'", substrs=["3"])
+        self.expect("frame variable 'sp->x'", substrs=["1"])
+        self.expect("frame variable 'sp->r'", substrs=["2"])
+        self.expect("frame variable 'sp->r + 1'", substrs=["3"])
+        self.expect("frame variable 'sarr->x'", substrs=["5"]);
+        self.expect("frame variable 'sarr->r'", substrs=["2"])
+        self.expect("frame variable 'sarr->r + 1'", substrs=["3"])
+        self.expect("frame variable '(sarr + 1)->x'", substrs=["1"])
 
-        self.expect("frame variable --dil 'sp->4'", error=True,
+        self.expect("frame variable 'sp->4'", error=True,
                     substrs=["<expr>:1:5: expected 'identifier', got: <'4' "
                              "(numeric_constant)>\n"
                              "sp->4\n"
                              "    ^"])
-        self.expect("frame variable --dil 'sp->foo'", error=True,
+        self.expect("frame variable 'sp->foo'", error=True,
                     substrs=["no member named 'foo' in 'Sx'"])
-        self.expect("frame variable --dil 'sp->r / (void*)0'", error=True,
+        self.expect("frame variable 'sp->r / (void*)0'", error=True,
                     substrs=["invalid operands to binary expression ('int' and "
                              "'void *')"])
 
-        self.expect("frame variable --dil 'sp.x'", error=True,
+        self.expect("frame variable 'sp.x'", error=True,
                     substrs=["member reference type 'Sx *' is a "
                              "pointer; did you mean to use '->'"])
-        self.expect("frame variable --dil 'sarr.x'", error=True,
+        self.expect("frame variable 'sarr.x'", error=True,
                     substrs=["member reference base type 'Sx[2]' is not a "
                              "structure or union"])
 
         # Test for record typedefs.
-        self.expect("frame variable --dil 'sa.x'", substrs=["3"])
-        self.expect("frame variable --dil 'sa.y'", substrs=["'\\x04'"])
+        self.expect("frame variable 'sa.x'", substrs=["3"])
+        self.expect("frame variable 'sa.y'", substrs=["'\\x04'"])

@@ -8,6 +8,8 @@
 
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Core/Debugger.h"
+#include "lldb/Core/DILEval.h"
+#include "lldb/Core/DILParser.h"
 #include "lldb/Core/Disassembler.h"
 #include "lldb/Core/FormatEntity.h"
 #include "lldb/Core/Mangled.h"
@@ -24,8 +26,6 @@
 #include "lldb/Symbol/Type.h"
 #include "lldb/Symbol/VariableList.h"
 #include "lldb/Target/ABI.h"
-#include "lldb/Target/DILEval.h"
-#include "lldb/Target/DILParser.h"
 #include "lldb/Target/ExecutionContext.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -524,7 +524,7 @@ ValueObjectSP StackFrame::DILEvaluateVariableExpression(
   // Parse the expression.
   Status parse_error, eval_error;
   DILParser parser(source, shared_from_this(), !no_synth_child);
-  ExprResult tree = parser.Run(parse_error);
+  ParseResult tree = parser.Run(parse_error);
   if (parse_error.Fail()) {
     error = parse_error;
     return ValueObjectSP();

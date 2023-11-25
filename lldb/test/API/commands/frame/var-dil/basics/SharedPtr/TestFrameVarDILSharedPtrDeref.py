@@ -58,12 +58,15 @@ class TestFrameVarDILSharedPtrDeref(TestBase):
 
 
 
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+
         # Test member-of dereference.
-        self.expect("frame variable --dil 'ptr_node->value'", substrs=["1"])
-        self.expect("frame variable --dil 'ptr_node->next->value'",
+        self.expect("frame variable 'ptr_node->value'", substrs=["1"])
+        self.expect("frame variable 'ptr_node->next->value'",
                     substrs=["2"])
 
         # Test ptr dereference.
-        self.expect("frame variable --dil '(*ptr_node).value'", substrs=["1"])
-        self.expect("frame variable --dil '(*(*ptr_node).next).value'",
+        self.expect("frame variable '(*ptr_node).value'", substrs=["1"])
+        self.expect("frame variable '(*(*ptr_node).next).value'",
                     substrs=["2"])

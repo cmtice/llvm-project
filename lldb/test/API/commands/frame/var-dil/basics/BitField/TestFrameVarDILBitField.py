@@ -56,28 +56,30 @@ class TestFrameVarDILBitField(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil 'bf.a'", substrs=["1023"])
-        self.expect("frame variable --dil 'bf.b'", substrs=["9"])
-        self.expect("frame variable --dil 'bf.c'", substrs=["false"])
-        self.expect("frame variable --dil 'bf.d'", substrs=["true"])
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable 'bf.a'", substrs=["1023"])
+        self.expect("frame variable 'bf.b'", substrs=["9"])
+        self.expect("frame variable 'bf.c'", substrs=["false"])
+        self.expect("frame variable 'bf.d'", substrs=["true"])
 
         # Perform an operation to ensure we actually read the value.
-        self.expect("frame variable --dil '0 + bf.a'", substrs=["1023"])
-        self.expect("frame variable --dil '0 + bf.b'", substrs=["9"])
-        self.expect("frame variable --dil '0 + bf.c'", substrs=["0"])
-        self.expect("frame variable --dil '0 + bf.d'", substrs=["1"])
+        self.expect("frame variable '0 + bf.a'", substrs=["1023"])
+        self.expect("frame variable '0 + bf.b'", substrs=["9"])
+        self.expect("frame variable '0 + bf.c'", substrs=["0"])
+        self.expect("frame variable '0 + bf.d'", substrs=["1"])
 
-        self.expect("frame variable --dil 'abf.a'", substrs=["1023"])
-        self.expect("frame variable --dil 'abf.b'", substrs=["'\\x0f'"])
-        self.expect("frame variable --dil 'abf.c'", substrs=["3"])
+        self.expect("frame variable 'abf.a'", substrs=["1023"])
+        self.expect("frame variable 'abf.b'", substrs=["'\\x0f'"])
+        self.expect("frame variable 'abf.c'", substrs=["3"])
 
         # Perform an operation to ensure we actually read the value.
-        self.expect("frame variable --dil 'abf.a + 0'", substrs=["1023"])
-        self.expect("frame variable --dil 'abf.b + 0'", substrs=["15"])
-        self.expect("frame variable --dil 'abf.c + 0'", substrs=["3"])
+        self.expect("frame variable 'abf.a + 0'", substrs=["1023"])
+        self.expect("frame variable 'abf.b + 0'", substrs=["15"])
+        self.expect("frame variable 'abf.c + 0'", substrs=["3"])
 
         # Address-of is not allowed for bit-fields.
-        self.expect("frame variable --dil '&bf.a'", error=True,
+        self.expect("frame variable '&bf.a'", error=True,
                     substrs=["address of bit-field requested"])
-        self.expect("frame variable --dil '&(true ? bf.a : bf.a)'", error=True,
+        self.expect("frame variable '&(true ? bf.a : bf.a)'", error=True,
                     substrs=["address of bit-field requested"])

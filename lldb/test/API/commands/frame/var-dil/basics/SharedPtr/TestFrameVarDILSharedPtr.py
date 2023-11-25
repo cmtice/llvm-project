@@ -56,22 +56,24 @@ class TestFrameVarDILSharedPtr(TestBase):
         command_result = lldb.SBCommandReturnObject()
         interp = self.dbg.GetCommandInterpreter()
 
-        self.expect("frame variable --dil '*(NodeS**)&ptr_node.__ptr_'",
+        self.expect("settings set target.experimental.use-DIL true",
+                    substrs=[""])
+        self.expect("frame variable '*(NodeS**)&ptr_node.__ptr_'",
                     patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '(*(NodeS**)&ptr_node.__ptr_)->value'",
+        self.expect("frame variable '(*(NodeS**)&ptr_node.__ptr_)->value'",
                     substrs=["1"])
 
-        self.expect("frame variable --dil 'ptr_node.__ptr_'",
+        self.expect("frame variable 'ptr_node.__ptr_'",
                     patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil 'ptr_node.__ptr_->value'",
+        self.expect("frame variable 'ptr_node.__ptr_->value'",
                     substrs=["1"])
-        self.expect("frame variable --dil 'ptr_node.__ptr_->next.__ptr_->value'",
+        self.expect("frame variable 'ptr_node.__ptr_->next.__ptr_->value'",
                     substrs=["2"])
 
-        self.expect("frame variable --dil 'ptr_int.__ptr_'",
+        self.expect("frame variable 'ptr_int.__ptr_'",
                     patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '*ptr_int.__ptr_'", substrs=["1"])
-        self.expect("frame variable --dil 'ptr_int_weak.__ptr_'",
+        self.expect("frame variable '*ptr_int.__ptr_'", substrs=["1"])
+        self.expect("frame variable 'ptr_int_weak.__ptr_'",
                     patterns=["0x[0-9]+"])
-        self.expect("frame variable --dil '*ptr_int_weak.__ptr_'",
+        self.expect("frame variable '*ptr_int_weak.__ptr_'",
                     substrs=["1"])

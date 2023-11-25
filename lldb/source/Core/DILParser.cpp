@@ -11,7 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "lldb/Target/DILParser.h"
+#include "lldb/Core/DILParser.h"
 
 #include <stdlib.h>
 
@@ -39,7 +39,7 @@
 #include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Lex/Token.h"
 #include "lldb/lldb-enumerations.h"
-#include "lldb/Target/DILAst.h"
+#include "lldb/Core/DILAst.h"
 #include "lldb/Target/ExecutionContextScope.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/iterator_range.h"
@@ -633,7 +633,7 @@ static bool TokenEndsTemplateArgumentList(const clang::Token& token) {
                        clang::tok::greatergreater);
 }
 
-static ExprResult InsertSmartPtrToPointerConversion(ExprResult expr) {
+static ParseResult InsertSmartPtrToPointerConversion(ParseResult expr) {
   auto expr_type = expr->result_type_deref();
 
   assert(
@@ -644,7 +644,7 @@ static ExprResult InsertSmartPtrToPointerConversion(ExprResult expr) {
       std::move(expr));
 }
 
-static ExprResult InsertArrayToPointerConversion(ExprResult expr) {
+static ParseResult InsertArrayToPointerConversion(ParseResult expr) {
   assert(expr->result_type_deref().IsArrayType() &&
          "an argument to array-to-pointer conversion must be an array");
 
@@ -730,8 +730,8 @@ static CompilerType DoIntegralPromotion(
       : int_type;
 }
 
-static ExprResult UsualUnaryConversions(
-    std::shared_ptr<ExecutionContextScope>  ctx, ExprResult expr) {
+static ParseResult UsualUnaryConversions(
+    std::shared_ptr<ExecutionContextScope>  ctx, ParseResult expr) {
   // Perform usual conversions for unary operators. At the moment this includes
   // array-to-pointer and the integral promotion for eligible types.
   auto result_type = expr->result_type_deref();
@@ -841,8 +841,8 @@ static lldb::BasicType BasicTypeToUnsigned(lldb::BasicType basic_type) {
 }
 
 static void PerformIntegerConversions(std::shared_ptr<ExecutionContextScope> ctx,
-                                      ExprResult& l,
-                                      ExprResult& r, bool convert_lhs,
+                                      ParseResult& l,
+                                      ParseResult& r, bool convert_lhs,
                                       bool convert_rhs) {
   // Assert that rank(l) < rank(r).
   auto l_type = l->result_type_deref();
@@ -883,8 +883,8 @@ static void PerformIntegerConversions(std::shared_ptr<ExecutionContextScope> ctx
 
 static CompilerType UsualArithmeticConversions(
     std::shared_ptr<ExecutionContextScope> ctx,
-    ExprResult& lhs,
-    ExprResult& rhs,
+    ParseResult& lhs,
+    ParseResult& rhs,
     bool is_comp_assign = false) {
   // Apply unary conversions (e.g. intergal promotion) for both operands.
   // In case of a composite assignment operator LHS shouldn't get promoted.
@@ -1130,10 +1130,10 @@ DILParser::DILParser(std::shared_ptr<DILSourceManager> dil_sm,
   m_token.setKind(clang::tok::unknown);
 }
 
-ExprResult DILParser::Run(Status& error) {
+ParseResult DILParser::Run(Status& error) {
   ConsumeToken();
 
-  ExprResult expr;
+  ParseResult expr;
 
   if (clang::tok::isStringLiteral(m_token.getKind()) &&
       m_pp->LookAhead(0).is(clang::tok::eof)) {
@@ -1386,7 +1386,7 @@ bool DILParser::HandleSimpleTypeSpecifier(TypeDeclaration* type_decl) {
   }
 }
 
-ExprResult DILParser::ParseStringLiteral() {
+ParseResult DILParser::ParseStringLiteral() {
   ExpectOneOf(clang::tok::string_literal, clang::tok::wide_string_literal,
               clang::tok::utf8_string_literal, clang::tok::utf16_string_literal,
               clang::tok::utf32_string_literal);
@@ -1433,7 +1433,7 @@ ExprResult DILParser::ParseStringLiteral() {
 //  expression:
 //    assignment_expression
 //
-ExprResult DILParser::ParseExpression() { return ParseAssignmentExpression(); }
+ParseResult DILParser::ParseExpression() { return ParseAssignmentExpression(); }
 
 // Parse an assingment_expression.
 //
@@ -1458,7 +1458,7 @@ ExprResult DILParser::ParseExpression() { return ParseAssignmentExpression(); }
 //    logical_or_expression
 //    logical_or_expression "?" expression ":" assignment_expression
 //
-ExprResult DILParser::ParseAssignmentExpression() {
+ParseResult DILParser::ParseAssignmentExpression() {
   auto lhs = ParseLogicalOrExpression();
 
   // Check if it's an assignment expression.
@@ -1496,7 +1496,7 @@ ExprResult DILParser::ParseAssignmentExpression() {
 //  logical_or_expression:
 //    logical_and_expression {"||" logical_and_expression}
 //
-ExprResult DILParser::ParseLogicalOrExpression() {
+ParseResult DILParser::ParseLogicalOrExpression() {
   auto lhs = ParseLogicalAndExpression();
 
   while (m_token.is(clang::tok::pipepipe)) {
@@ -1515,7 +1515,7 @@ ExprResult DILParser::ParseLogicalOrExpression() {
 //  logical_and_expression:
 //    inclusive_or_expression {"&&" inclusive_or_expression}
 //
-ExprResult DILParser::ParseLogicalAndExpression() {
+ParseResult DILParser::ParseLogicalAndExpression() {
   auto lhs = ParseInclusiveOrExpression();
 
   while (m_token.is(clang::tok::ampamp)) {
@@ -1534,7 +1534,7 @@ ExprResult DILParser::ParseLogicalAndExpression() {
 //  inclusive_or_expression:
 //    exclusive_or_expression {"|" exclusive_or_expression}
 //
-ExprResult DILParser::ParseInclusiveOrExpression() {
+ParseResult DILParser::ParseInclusiveOrExpression() {
   auto lhs = ParseExclusiveOrExpression();
 
   while (m_token.is(clang::tok::pipe)) {
@@ -1553,7 +1553,7 @@ ExprResult DILParser::ParseInclusiveOrExpression() {
 //  exclusive_or_expression:
 //    and_expression {"^" and_expression}
 //
-ExprResult DILParser::ParseExclusiveOrExpression() {
+ParseResult DILParser::ParseExclusiveOrExpression() {
   auto lhs = ParseAndExpression();
 
   while (m_token.is(clang::tok::caret)) {
@@ -1572,7 +1572,7 @@ ExprResult DILParser::ParseExclusiveOrExpression() {
 //  and_expression:
 //    equality_expression {"&" equality_expression}
 //
-ExprResult DILParser::ParseAndExpression() {
+ParseResult DILParser::ParseAndExpression() {
   auto lhs = ParseEqualityExpression();
 
   while (m_token.is(clang::tok::amp)) {
@@ -1592,7 +1592,7 @@ ExprResult DILParser::ParseAndExpression() {
 //    relational_expression {"==" relational_expression}
 //    relational_expression {"!=" relational_expression}
 //
-ExprResult DILParser::ParseEqualityExpression() {
+ParseResult DILParser::ParseEqualityExpression() {
   auto lhs = ParseRelationalExpression();
 
   while (m_token.isOneOf(clang::tok::equalequal, clang::tok::exclaimequal)) {
@@ -1614,7 +1614,7 @@ ExprResult DILParser::ParseEqualityExpression() {
 //    shift_expression {"<=" shift_expression}
 //    shift_expression {">=" shift_expression}
 //
-ExprResult DILParser::ParseRelationalExpression() {
+ParseResult DILParser::ParseRelationalExpression() {
   auto lhs = ParseShiftExpression();
 
   while (m_token.isOneOf(clang::tok::less, clang::tok::greater,
@@ -1635,7 +1635,7 @@ ExprResult DILParser::ParseRelationalExpression() {
 //    additive_expression {"<<" additive_expression}
 //    additive_expression {">>" additive_expression}
 //
-ExprResult DILParser::ParseShiftExpression() {
+ParseResult DILParser::ParseShiftExpression() {
   auto lhs = ParseAdditiveExpression();
 
   while (m_token.isOneOf(clang::tok::lessless, clang::tok::greatergreater)) {
@@ -1655,7 +1655,7 @@ ExprResult DILParser::ParseShiftExpression() {
 //    multiplicative_expression {"+" multiplicative_expression}
 //    multiplicative_expression {"-" multiplicative_expression}
 //
-ExprResult DILParser::ParseAdditiveExpression() {
+ParseResult DILParser::ParseAdditiveExpression() {
   auto lhs = ParseMultiplicativeExpression();
 
   while (m_token.isOneOf(clang::tok::plus, clang::tok::minus)) {
@@ -1676,7 +1676,7 @@ ExprResult DILParser::ParseAdditiveExpression() {
 //    cast_expression {"/" cast_expression}
 //    cast_expression {"%" cast_expression}
 //
-ExprResult DILParser::ParseMultiplicativeExpression() {
+ParseResult DILParser::ParseMultiplicativeExpression() {
   auto lhs = ParseCastExpression();
 
   while (m_token.isOneOf(clang::tok::star, clang::tok::slash,
@@ -1699,7 +1699,7 @@ ExprResult DILParser::ParseMultiplicativeExpression() {
 //    unary_expression
 //    "(" type_id ")" cast_expression
 //
-ExprResult DILParser::ParseCastExpression() {
+ParseResult DILParser::ParseCastExpression() {
   // This can be a C-style cast, try parsing the contents as a type declaration.
   if (m_token.is(clang::tok::l_paren)) {
     clang::Token token = m_token;
@@ -1759,7 +1759,7 @@ ExprResult DILParser::ParseCastExpression() {
 //    "~"
 //    "!"
 //
-ExprResult DILParser::ParseUnaryExpression() {
+ParseResult DILParser::ParseUnaryExpression() {
   if (m_token.isOneOf(clang::tok::plusplus, clang::tok::minusminus,
                      clang::tok::star, clang::tok::amp, clang::tok::plus,
                      clang::tok::minus, clang::tok::exclaim,
@@ -1870,10 +1870,10 @@ ExprResult DILParser::ParseUnaryExpression() {
 //    dynamic_cast "<" type_id ">" "(" expression ")" ;
 //    reinterpret_cast "<" type_id ">" "(" expression ")" ;
 //
-ExprResult DILParser::ParsePostfixExpression() {
+ParseResult DILParser::ParsePostfixExpression() {
   // Parse the first part of the postfix_expression. This could be either a
   // primary_expression, or a postfix_expression itself.
-  ExprResult lhs;
+  ParseResult lhs;
   CompilerType bad_type;
 
   // C++-style cast.
@@ -1978,7 +1978,7 @@ ExprResult DILParser::ParsePostfixExpression() {
 //    "(" expression ")"
 //    builtin_func
 //
-ExprResult DILParser::ParsePrimaryExpression() {
+ParseResult DILParser::ParsePrimaryExpression() {
   CompilerType bad_type;
   if (m_token.is(clang::tok::numeric_constant)) {
     return ParseNumericLiteral();
@@ -2570,7 +2570,7 @@ std::string DILParser::ParseTemplateArgument() {
   // TODO: Another valid option here is a constant_expression, but
   // we definitely don't want to support constant arithmetic like "Foo<1+2>".
   // We can probably use ParsePrimaryExpression here, but need to figure out the
-  // "stringification", since ParsePrimaryExpression returns ExprResult (and
+  // "stringification", since ParsePrimaryExpression returns ParseResult (and
   // potentially a whole expression, not just a single constant.)
 
   // This is not a template_argument.
@@ -2679,9 +2679,9 @@ std::string DILParser::ParseUnqualifiedId() {
 //  numeric_literal:
 //    ? clang::tok::numeric_constant ?
 //
-ExprResult DILParser::ParseNumericLiteral() {
+ParseResult DILParser::ParseNumericLiteral() {
   Expect(clang::tok::numeric_constant);
-  ExprResult numeric_constant = ParseNumericConstant(m_token);
+  ParseResult numeric_constant = ParseNumericConstant(m_token);
   ConsumeToken();
   return numeric_constant;
 }
@@ -2692,7 +2692,7 @@ ExprResult DILParser::ParseNumericLiteral() {
 //    "true"
 //    "false"
 //
-ExprResult DILParser::ParseBooleanLiteral() {
+ParseResult DILParser::ParseBooleanLiteral() {
   ExpectOneOf(clang::tok::kw_true, clang::tok::kw_false);
   clang::SourceLocation loc = m_token.getLocation();
   bool literal_value = m_token.is(clang::tok::kw_true);
@@ -2702,7 +2702,7 @@ ExprResult DILParser::ParseBooleanLiteral() {
       /*is_literal_zero*/ false);
 }
 
-ExprResult DILParser::ParseCharLiteral() {
+ParseResult DILParser::ParseCharLiteral() {
   ExpectOneOf(clang::tok::char_constant, clang::tok::wide_char_constant,
               clang::tok::utf8_char_constant, clang::tok::utf16_char_constant,
               clang::tok::utf32_char_constant);
@@ -2742,7 +2742,7 @@ ExprResult DILParser::ParseCharLiteral() {
 //  pointer_literal:
 //    "nullptr"
 //
-ExprResult DILParser::ParsePointerLiteral() {
+ParseResult DILParser::ParsePointerLiteral() {
   Expect(clang::tok::kw_nullptr);
   clang::SourceLocation loc = m_token.getLocation();
   ConsumeToken();
@@ -2752,7 +2752,7 @@ ExprResult DILParser::ParsePointerLiteral() {
       /*is_literal_zero*/ false);
 }
 
-ExprResult DILParser::ParseNumericConstant(clang::Token token) {
+ParseResult DILParser::ParseNumericConstant(clang::Token token) {
   CompilerType bad_type;
   // Parse numeric constant, it can be either integer or float.
   std::string tok_spelling = m_pp->getSpelling(token);
@@ -2786,7 +2786,7 @@ ExprResult DILParser::ParseNumericConstant(clang::Token token) {
   return std::make_unique<DILErrorNode>(bad_type);
 }
 
-ExprResult DILParser::ParseFloatingLiteral(
+ParseResult DILParser::ParseFloatingLiteral(
     clang::NumericLiteralParser& literal,
     clang::Token token) {
   const llvm::fltSemantics& format = literal.isFloat
@@ -2814,7 +2814,7 @@ ExprResult DILParser::ParseFloatingLiteral(
       /*is_literal_zero*/ false);
 }
 
-ExprResult DILParser::ParseIntegerLiteral(clang::NumericLiteralParser& literal,
+ParseResult DILParser::ParseIntegerLiteral(clang::NumericLiteralParser& literal,
                                           clang::Token token) {
   // Create a value big enough to fit all valid numbers.
   llvm::APInt raw_value(type_width<uintmax_t>(), 0);
@@ -2858,12 +2858,12 @@ ExprResult DILParser::ParseIntegerLiteral(clang::NumericLiteralParser& literal,
 //  builtin_func_argument:
 //    expression
 //
-ExprResult DILParser::ParseBuiltinFunction(
+ParseResult DILParser::ParseBuiltinFunction(
     clang::SourceLocation loc, std::unique_ptr<BuiltinFunctionDef> func_def) {
   Expect(clang::tok::l_paren);
   ConsumeToken();
 
-  std::vector<ExprResult> arguments;
+  std::vector<ParseResult> arguments;
   CompilerType bad_type;
 
   if (m_token.is(clang::tok::r_paren)) {
@@ -2924,7 +2924,7 @@ ExprResult DILParser::ParseBuiltinFunction(
       loc, func_def->m_return_type, func_def->m_name, std::move(arguments));
 }
 
-ExprResult DILParser::BuildCStyleCast(CompilerType type, ExprResult rhs,
+ParseResult DILParser::BuildCStyleCast(CompilerType type, ParseResult rhs,
                                       clang::SourceLocation location) {
   CStyleCastKind kind;
   CompilerType bad_type;
@@ -3033,8 +3033,8 @@ ExprResult DILParser::BuildCStyleCast(CompilerType type, ExprResult rhs,
   return std::make_unique<CStyleCastNode>(location, type, std::move(rhs), kind);
 }
 
-ExprResult DILParser::BuildCxxCast(clang::tok::TokenKind kind, CompilerType type,
-                                   ExprResult rhs,
+ParseResult DILParser::BuildCxxCast(clang::tok::TokenKind kind, CompilerType type,
+                                   ParseResult rhs,
                                    clang::SourceLocation location) {
   assert((kind == clang::tok::kw_static_cast ||
           kind == clang::tok::kw_dynamic_cast ||
@@ -3054,7 +3054,7 @@ ExprResult DILParser::BuildCxxCast(clang::tok::TokenKind kind, CompilerType type
   return BuildCStyleCast(type, std::move(rhs), location);
 }
 
-ExprResult DILParser::BuildCxxStaticCast(CompilerType type, ExprResult rhs,
+ParseResult DILParser::BuildCxxStaticCast(CompilerType type, ParseResult rhs,
                                          clang::SourceLocation location) {
   auto rhs_type = rhs->result_type_deref();
 
@@ -3091,8 +3091,8 @@ ExprResult DILParser::BuildCxxStaticCast(CompilerType type, ExprResult rhs,
   return std::make_unique<DILErrorNode>(bad_type);
 }
 
-ExprResult DILParser::BuildCxxStaticCastToScalar(CompilerType type,
-                                                 ExprResult rhs,
+ParseResult DILParser::BuildCxxStaticCastToScalar(CompilerType type,
+                                                 ParseResult rhs,
                                                  clang::SourceLocation location)
 {
   auto rhs_type = rhs->result_type_deref();
@@ -3122,7 +3122,7 @@ ExprResult DILParser::BuildCxxStaticCastToScalar(CompilerType type,
                                              /*is_rvalue*/ true);
 }
 
-ExprResult DILParser::BuildCxxStaticCastToEnum(CompilerType type, ExprResult rhs,
+ParseResult DILParser::BuildCxxStaticCastToEnum(CompilerType type, ParseResult rhs,
                                                clang::SourceLocation location) {
   auto rhs_type = rhs->result_type_deref();
 
@@ -3140,8 +3140,8 @@ ExprResult DILParser::BuildCxxStaticCastToEnum(CompilerType type, ExprResult rhs
                                              /*is_rvalue*/ true);
 }
 
-ExprResult DILParser::BuildCxxStaticCastToPointer(CompilerType type,
-                                                  ExprResult rhs,
+ParseResult DILParser::BuildCxxStaticCastToPointer(CompilerType type,
+                                                  ParseResult rhs,
                                                   clang::SourceLocation location)
 {
   CompilerType bad_type;
@@ -3176,8 +3176,8 @@ ExprResult DILParser::BuildCxxStaticCastToPointer(CompilerType type,
                                              /*is_rvalue*/ true);
 }
 
-ExprResult DILParser::BuildCxxStaticCastToNullPtr(CompilerType type,
-                                                  ExprResult rhs,
+ParseResult DILParser::BuildCxxStaticCastToNullPtr(CompilerType type,
+                                                  ParseResult rhs,
                                                   clang::SourceLocation location)
 {
   auto rhs_type = rhs->result_type_deref();
@@ -3196,9 +3196,9 @@ ExprResult DILParser::BuildCxxStaticCastToNullPtr(CompilerType type,
                                              /*is_rvalue*/ true);
 }
 
-ExprResult DILParser::BuildCxxStaticCastToReference(
+ParseResult DILParser::BuildCxxStaticCastToReference(
     CompilerType type,
-    ExprResult rhs,
+    ParseResult rhs,
     clang::SourceLocation location) {
   CompilerType bad_type;
   auto rhs_type = rhs->result_type_deref();
@@ -3230,8 +3230,8 @@ ExprResult DILParser::BuildCxxStaticCastToReference(
   return std::make_unique<DILErrorNode>(bad_type);
 }
 
-ExprResult DILParser::BuildCxxStaticCastForInheritedTypes(
-    CompilerType type, ExprResult rhs, clang::SourceLocation location) {
+ParseResult DILParser::BuildCxxStaticCastForInheritedTypes(
+    CompilerType type, ParseResult rhs, clang::SourceLocation location) {
   assert((type.IsPointerType() || type.IsReferenceType()) &&
          "target type should either be a pointer or a reference");
 
@@ -3291,7 +3291,7 @@ ExprResult DILParser::BuildCxxStaticCastForInheritedTypes(
   return std::make_unique<DILErrorNode>(bad_type);
 }
 
-ExprResult DILParser::BuildCxxReinterpretCast(CompilerType type, ExprResult rhs,
+ParseResult DILParser::BuildCxxReinterpretCast(CompilerType type, ParseResult rhs,
                                               clang::SourceLocation location) {
   CompilerType bad_type;
   auto rhs_type = rhs->result_type_deref();
@@ -3395,7 +3395,7 @@ ExprResult DILParser::BuildCxxReinterpretCast(CompilerType type, ExprResult rhs,
                                                   std::move(rhs), is_rvalue);
 }
 
-ExprResult DILParser::BuildCxxDynamicCast(CompilerType type, ExprResult rhs,
+ParseResult DILParser::BuildCxxDynamicCast(CompilerType type, ParseResult rhs,
                                           clang::SourceLocation location) {
   CompilerType pointee_type;
   CompilerType bad_type;
@@ -3459,7 +3459,7 @@ ExprResult DILParser::BuildCxxDynamicCast(CompilerType type, ExprResult rhs,
   return std::make_unique<DILErrorNode>(bad_type);
 }
 
-ExprResult DILParser::BuildUnaryOp(UnaryOpKind kind, ExprResult rhs,
+ParseResult DILParser::BuildUnaryOp(UnaryOpKind kind, ParseResult rhs,
                                 clang::SourceLocation location) {
   CompilerType result_type;
   auto rhs_type = rhs->result_type_deref();
@@ -3550,11 +3550,11 @@ ExprResult DILParser::BuildUnaryOp(UnaryOpKind kind, ExprResult rhs,
                                        std::move(rhs));
 }
 
-ExprResult DILParser::BuildBinaryOp(BinaryOpKind kind, ExprResult lhs,
-                                 ExprResult rhs,
+ParseResult DILParser::BuildBinaryOp(BinaryOpKind kind, ParseResult lhs,
+                                 ParseResult rhs,
                                  clang::SourceLocation location) {
   // TODO: Get the "original" type (i.e. the one before implicit casts)
-  // from the ExprResult.
+  // from the ParseResult.
   auto orig_lhs_type = lhs->result_type_deref();
   auto orig_rhs_type = rhs->result_type_deref();
 
@@ -3687,8 +3687,8 @@ ExprResult DILParser::BuildBinaryOp(BinaryOpKind kind, ExprResult lhs,
   return std::make_unique<DILErrorNode>(bad_type);
 }
 
-ExprResult DILParser::BuildTernaryOp(ExprResult cond, ExprResult lhs,
-                                  ExprResult rhs,
+ParseResult DILParser::BuildTernaryOp(ParseResult cond, ParseResult lhs,
+                                  ParseResult rhs,
                                   clang::SourceLocation location) {
   CompilerType bad_type;
   // First check if the condition contextually converted to bool.
@@ -3778,14 +3778,14 @@ ExprResult DILParser::BuildTernaryOp(ExprResult cond, ExprResult lhs,
   return std::make_unique<DILErrorNode>(bad_type);
 }
 
-ExprResult DILParser::BuildBinarySubscript(ExprResult lhs, ExprResult rhs,
+ParseResult DILParser::BuildBinarySubscript(ParseResult lhs, ParseResult rhs,
                                         clang::SourceLocation location) {
   // C99 6.5.2.1p2: the expression e1[e2] is by definition precisely
   // equivalent to the expression *((e1)+(e2)).
   // We need to figure out which expression is "base" and which is "index".
 
-  ExprResult base;
-  ExprResult index;
+  ParseResult base;
+  ParseResult index;
   CompilerType bad_type;
 
   auto lhs_type = lhs->result_type_deref();
@@ -3849,7 +3849,7 @@ ExprResult DILParser::BuildBinarySubscript(ExprResult lhs, ExprResult rhs,
       std::move(index));
 }
 
-ExprResult DILParser::BuildMemberOf(ExprResult lhs, std::string member_id,
+ParseResult DILParser::BuildMemberOf(ParseResult lhs, std::string member_id,
                                     bool is_arrow,
                                     clang::SourceLocation location) {
   CompilerType bad_type;
@@ -3964,7 +3964,7 @@ void DILParser::ExpectOneOf(clang::tok::TokenKind k, Ts... ks) {
   }
 }
 
-ExprResult DILParser::BuildIncrementDecrement(UnaryOpKind kind, ExprResult rhs,
+ParseResult DILParser::BuildIncrementDecrement(UnaryOpKind kind, ParseResult rhs,
                                               clang::SourceLocation location) {
   assert((kind == UnaryOpKind::PreInc || kind == UnaryOpKind::PreDec ||
           kind == UnaryOpKind::PostInc || kind == UnaryOpKind::PostDec) &&
@@ -4015,7 +4015,7 @@ ExprResult DILParser::BuildIncrementDecrement(UnaryOpKind kind, ExprResult rhs,
                                        std::move(rhs));
 }
 
-CompilerType DILParser::PrepareBinaryAddition(ExprResult& lhs, ExprResult& rhs,
+CompilerType DILParser::PrepareBinaryAddition(ParseResult& lhs, ParseResult& rhs,
                                               clang::SourceLocation location,
                                               bool is_comp_assign) {
   // Operation '+' works for:
@@ -4059,8 +4059,8 @@ CompilerType DILParser::PrepareBinaryAddition(ExprResult& lhs, ExprResult& rhs,
   return ptr_type;
 }
 
-CompilerType DILParser::PrepareBinarySubtraction(ExprResult& lhs,
-                                                 ExprResult& rhs,
+CompilerType DILParser::PrepareBinarySubtraction(ParseResult& lhs,
+                                                 ParseResult& rhs,
                                                  clang::SourceLocation location,
                                                  bool is_comp_assign) {
   // Operation '-' works for:
@@ -4122,7 +4122,7 @@ CompilerType DILParser::PrepareBinarySubtraction(ExprResult& lhs,
   return bad_type;
 }
 
-CompilerType DILParser::PrepareBinaryMulDiv(ExprResult& lhs, ExprResult& rhs,
+CompilerType DILParser::PrepareBinaryMulDiv(ParseResult& lhs, ParseResult& rhs,
                                             bool is_comp_assign) {
   // Operations {'*', '/'} work for:
   //
@@ -4142,7 +4142,7 @@ CompilerType DILParser::PrepareBinaryMulDiv(ExprResult& lhs, ExprResult& rhs,
   return bad_type;
 }
 
-CompilerType DILParser::PrepareBinaryRemainder(ExprResult& lhs, ExprResult& rhs,
+CompilerType DILParser::PrepareBinaryRemainder(ParseResult& lhs, ParseResult& rhs,
                                                bool is_comp_assign) {
   // Operation '%' works for:
   //
@@ -4161,7 +4161,7 @@ CompilerType DILParser::PrepareBinaryRemainder(ExprResult& lhs, ExprResult& rhs,
   return bad_type;;
 }
 
-CompilerType DILParser::PrepareBinaryBitwise(ExprResult& lhs, ExprResult& rhs,
+CompilerType DILParser::PrepareBinaryBitwise(ParseResult& lhs, ParseResult& rhs,
                                              bool is_comp_assign) {
   // Operations {'&', '|', '^'} work for:
   //
@@ -4181,7 +4181,7 @@ CompilerType DILParser::PrepareBinaryBitwise(ExprResult& lhs, ExprResult& rhs,
   return bad_type;;
 }
 
-CompilerType DILParser::PrepareBinaryShift(ExprResult& lhs, ExprResult& rhs,
+CompilerType DILParser::PrepareBinaryShift(ParseResult& lhs, ParseResult& rhs,
                                            bool is_comp_assign) {
   // Operations {'<<', '>>'} work for:
   //
@@ -4205,8 +4205,8 @@ CompilerType DILParser::PrepareBinaryShift(ExprResult& lhs, ExprResult& rhs,
 }
 
 CompilerType DILParser::PrepareBinaryComparison(BinaryOpKind kind,
-                                                ExprResult& lhs,
-                                                ExprResult& rhs,
+                                                ParseResult& lhs,
+                                                ParseResult& rhs,
                                                 clang::SourceLocation location)
 {
   // Comparison works for:
@@ -4310,8 +4310,8 @@ CompilerType DILParser::PrepareBinaryComparison(BinaryOpKind kind,
   return bad_type;
 }
 
-CompilerType DILParser::PrepareBinaryLogical(const ExprResult& lhs,
-                                             const ExprResult& rhs) {
+CompilerType DILParser::PrepareBinaryLogical(const ParseResult& lhs,
+                                             const ParseResult& rhs) {
   CompilerType bad_type;
   auto lhs_type = lhs->result_type_deref();
   auto rhs_type = rhs->result_type_deref();
@@ -4338,7 +4338,7 @@ CompilerType DILParser::PrepareBinaryLogical(const ExprResult& lhs,
 
 CompilerType DILParser::PrepareCompositeAssignment(
     CompilerType comp_assign_type,
-    const ExprResult& lhs,
+    const ParseResult& lhs,
     clang::SourceLocation location) {
   // In C++ the requirement here is that the expression is "assignable".
   // However in the debugger context side-effects are not allowed and the only
@@ -4463,8 +4463,8 @@ bool DILParser::ImplicitConversionIsAllowed(CompilerType src, CompilerType dst,
   return false;
 }
 
-ExprResult DILParser::InsertImplicitConversion(ExprResult expr,
-                                               CompilerType type) {
+ParseResult DILParser::InsertImplicitConversion(ParseResult expr,
+                                                CompilerType type) {
   auto expr_type = expr->result_type_deref();
 
   // If the expression already has the required type, nothing to do here.
